@@ -1,0 +1,607 @@
+[
+    {
+        "name": "Osagie",
+        "primary_meaning": "God is the greatest",
+        "contextual_meaning": "A name that reflects the belief in the supreme power of God, often given to boys",
+        "region_origin": "Nigeria",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Edo language, meaning 'God is the greatest'",
+        "gender": "Male",
+        "pronunciation": "/ɔsɑːɡi/",
+        "vibe_tags": [
+            "spiritual",
+            "powerful",
+            "traditional"
+        ],
+        "etymology": {
+            "language_family": "Niger-Congo",
+            "historical_period": "Pre-colonial to Modern",
+            "related_variants": [
+                "Osaghae",
+                "Osaghi"
+            ]
+        }
+    },
+    {
+        "name": "Efe",
+        "primary_meaning": "Wealth",
+        "contextual_meaning": "A name that signifies prosperity and abundance, often given to boys",
+        "region_origin": "Nigeria",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Edo language, meaning 'wealth'",
+        "gender": "Male",
+        "pronunciation": "/ˈɛfɛ/",
+        "vibe_tags": [
+            "prosperous",
+            "abundant",
+            "traditional"
+        ],
+        "etymology": {
+            "language_family": "Niger-Congo",
+            "historical_period": "Pre-colonial to Modern",
+            "related_variants": [
+                "Efe"
+            ]
+        }
+    },
+    {
+        "name": "Eghosa",
+        "primary_meaning": "God's time",
+        "contextual_meaning": "Given when a child arrives at the perfect time set by God.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Egho (Time) + Osa (God)",
+        "gender": "Neutral",
+        "pronunciation": "/ē-ghō-sā/",
+        "vibe_tags": [
+            "timing",
+            "patience",
+            "spiritual"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Philosophical",
+            "related_variants": [
+                "Eghosa"
+            ]
+        }
+    },
+    {
+        "name": "Adesuwa",
+        "primary_meaning": "In the midst of abundance",
+        "contextual_meaning": "Reflects a family that was waiting for wealth or child before birth.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Adesuwa (Inside of wealth)",
+        "gender": "Female",
+        "pronunciation": "/ā-dē-sū-wā/",
+        "vibe_tags": [
+            "wealth",
+            "prosperity",
+            "classic"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Celebratory"
+        }
+    },
+    {
+        "name": "Nosakhare",
+        "primary_meaning": "God loves me",
+        "contextual_meaning": "A testament to the belief that the child is a sign of divine love.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "No (who) + Osa (God) + Khare (loves)",
+        "gender": "Neutral",
+        "pronunciation": "/nō-sā-khā-rē/",
+        "vibe_tags": [
+            "love",
+            "spiritual",
+            "affection"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Theophoric",
+            "related_variants": [
+                "Nosakhare"
+            ]
+        }
+    },
+    {
+        "name": "Ehizogie",
+        "primary_meaning": "God's work is king",
+        "contextual_meaning": "Acknowledges that royalty or position is granted by divine will.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Ehi (Spirit/Destiny) + Zo (Builds) + Gie (King)",
+        "gender": "Male",
+        "pronunciation": "/ē-hē-zō-gē/",
+        "vibe_tags": [
+            "royalty",
+            "strong",
+            "destiny"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Royal",
+            "related_variants": [
+                "Ehizogie"
+            ]
+        }
+    },
+    {
+        "name": "Oseghale",
+        "primary_meaning": "God brought me home",
+        "contextual_meaning": "Used when a family has faced migration or distance.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Osa (God) + Eghale (brought/home)",
+        "gender": "Neutral",
+        "pronunciation": "/ō-sē-ghā-lē/",
+        "vibe_tags": [
+            "homecoming",
+            "journey",
+            "spiritual"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Migration"
+        }
+    },
+    {
+        "name": "Idia",
+        "primary_meaning": "The one who supports",
+        "contextual_meaning": "Historical name of Queen Idia; signifies immense strength and support.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Idia (Support/Stronghold)",
+        "gender": "Female",
+        "pronunciation": "/ē-dē-ā/",
+        "vibe_tags": [
+            "historical",
+            "queenly",
+            "strength"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Historical"
+        }
+    },
+    {
+        "name": "Efe",
+        "primary_meaning": "Wealth",
+        "contextual_meaning": "Short for longer names; symbolizes prosperity.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Efe (Wealth/Treasure)",
+        "gender": "Neutral",
+        "pronunciation": "/ē-fē/",
+        "vibe_tags": [
+            "wealth",
+            "simple",
+            "prosperous"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Prosperity"
+        }
+    },
+    {
+        "name": "Orobosa",
+        "primary_meaning": "It is in God's hands",
+        "contextual_meaning": "Surrender to divine will in difficult times.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Oro (It is) + Bo (Hand) + Osa (God)",
+        "gender": "Neutral",
+        "pronunciation": "/ō-rō-bō-sā/",
+        "vibe_tags": [
+            "faith",
+            "peace",
+            "surrender"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Philosophical"
+        }
+    },
+    {
+        "name": "Osariemen",
+        "primary_meaning": "God walks with me",
+        "contextual_meaning": "A prayer for protection throughout life.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Osa (God) + Rie (Walks) + Men (With me)",
+        "gender": "Neutral",
+        "pronunciation": "/ō-sā-rē-ē-mē/",
+        "vibe_tags": [
+            "protection",
+            "guidance",
+            "spiritual"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Theophoric"
+        }
+    },
+    {
+        "name": "Esosa",
+        "primary_meaning": "God's gift",
+        "contextual_meaning": "Direct acknowledgement of the child as a divine blessing.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Esa (Gift) + Osa (God)",
+        "gender": "Female",
+        "pronunciation": "/ē-sō-sā/",
+        "vibe_tags": [
+            "gift",
+            "blessing",
+            "sweet"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Blessing"
+        }
+    },
+    {
+        "name": "Iyore",
+        "primary_meaning": "We have seen the good again",
+        "contextual_meaning": "Born after a period of mourning or bad luck.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Iyo (We see) + Re (Again)",
+        "gender": "Neutral",
+        "pronunciation": "/ē-yō-rē/",
+        "vibe_tags": [
+            "restoration",
+            "hope",
+            "joy"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Redemption"
+        }
+    },
+    {
+        "name": "Akhere",
+        "primary_meaning": "It is small",
+        "contextual_meaning": "Used in humility; acknowledging small beginnings.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Akhe (Small)",
+        "gender": "Neutral",
+        "pronunciation": "/ā-khē-rē/",
+        "vibe_tags": [
+            "humility",
+            "growth",
+            "modest"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Humility"
+        }
+    },
+    {
+        "name": "Osayomore",
+        "primary_meaning": "God knows my story",
+        "contextual_meaning": "Acknowledges that only God knows the hardship or joy behind the birth.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Osa (God) + Yo (Knows) + More (My story)",
+        "gender": "Neutral",
+        "pronunciation": "/ō-sā-yō-mō-rē/",
+        "vibe_tags": [
+            "deep",
+            "story",
+            "truth"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Personal"
+        }
+    },
+    {
+        "name": "Eghosa",
+        "primary_meaning": "God's time is the best",
+        "contextual_meaning": "Faith in divine timing.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Egho (Time) + Osa (God)",
+        "gender": "Neutral",
+        "pronunciation": "/ē-ghō-sā/",
+        "vibe_tags": [
+            "patience",
+            "faith",
+            "classic"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Wisdom"
+        }
+    },
+    {
+        "name": "Omosigho",
+        "primary_meaning": "Children are precious",
+        "contextual_meaning": "A declaration of the intrinsic value of a child.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Omo (Child) + Sigho (Precious)",
+        "gender": "Female",
+        "pronunciation": "/ō-mō-sē-ghō/",
+        "vibe_tags": [
+            "precious",
+            "family",
+            "nurturing"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Family"
+        }
+    },
+    {
+        "name": "Osemudiamen",
+        "primary_meaning": "God stands with me",
+        "contextual_meaning": "Foundational prayer for support.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Osa (God) + Emu (Stand) + Dia (With) + Men (Me)",
+        "gender": "Male",
+        "pronunciation": "/ō-sē-mū-dē-ā-mē/",
+        "vibe_tags": [
+            "strong",
+            "support",
+            "faithful"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Protection"
+        }
+    },
+    {
+        "name": "Nosakhare",
+        "primary_meaning": "God loves me",
+        "contextual_meaning": "Declaration of divine affection.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "No (Who) + Osa (God) + Khare (Loves)",
+        "gender": "Neutral",
+        "pronunciation": "/nō-sā-khā-rē/",
+        "vibe_tags": [
+            "love",
+            "blissful",
+            "spiritual"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Theophoric"
+        }
+    },
+    {
+        "name": "Amenaghawon",
+        "primary_meaning": "Water does not forget its source",
+        "contextual_meaning": "A reminder of heritage and humility.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Amen (Water) + Ghawon (Remembers/Source)",
+        "gender": "Neutral",
+        "pronunciation": "/ā-mē-nā-ghā-wōn/",
+        "vibe_tags": [
+            "heritage",
+            "wisdom",
+            "grounded"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Proverbial"
+        }
+    },
+    {
+        "name": "Orobosa",
+        "primary_meaning": "It is God's will",
+        "contextual_meaning": "Acceptance of destiny.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Oro (It is) + Osa (God's)",
+        "gender": "Neutral",
+        "pronunciation": "/ō-rō-bō-sā/",
+        "vibe_tags": [
+            "will",
+            "destiny",
+            "peaceful"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Faith"
+        }
+    },
+    {
+        "name": "Eki",
+        "primary_meaning": "Market day",
+        "contextual_meaning": "Usually given to children born on market days.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Eki (Market)",
+        "gender": "Neutral",
+        "pronunciation": "/ē-kē/",
+        "vibe_tags": [
+            "time",
+            "traditional",
+            "commerce"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Chronological"
+        }
+    },
+    {
+        "name": "Egbe",
+        "primary_meaning": "Body/Family",
+        "contextual_meaning": "Symbolizes unity and physical strength.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Egbe (Body/Relative)",
+        "gender": "Neutral",
+        "pronunciation": "/ē-gbē/",
+        "vibe_tags": [
+            "strength",
+            "unity",
+            "family"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Physical"
+        }
+    },
+    {
+        "name": "Osaigbovo",
+        "primary_meaning": "God does not despise anyone",
+        "contextual_meaning": "Reflects the belief in equality before God.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Osa (God) + Igbovo (Despise/Reject)",
+        "gender": "Neutral",
+        "pronunciation": "/ō-sā-ē-gbō-vō/",
+        "vibe_tags": [
+            "equality",
+            "grace",
+            "humble"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Theological"
+        }
+    },
+    {
+        "name": "Uyi",
+        "primary_meaning": "Praise/Honor",
+        "contextual_meaning": "Short for Uyioghosa (Honor belongs to God).",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Uyi (Honor)",
+        "gender": "Neutral",
+        "pronunciation": "/ū-yē/",
+        "vibe_tags": [
+            "honorable",
+            "respect",
+            "classic"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Respect"
+        }
+    },
+    {
+        "name": "Esohe",
+        "primary_meaning": "God's prayer",
+        "contextual_meaning": "Born as an answer to a specific prayer.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Esa (Prayer) + Osa (God)",
+        "gender": "Female",
+        "pronunciation": "/ē-sō-hē/",
+        "vibe_tags": [
+            "prayer",
+            "blessed",
+            "divine"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Theophoric"
+        }
+    },
+    {
+        "name": "Igho",
+        "primary_meaning": "Money",
+        "contextual_meaning": "Used to denote value and preciousness.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Igho (Money/Precious)",
+        "gender": "Neutral",
+        "pronunciation": "/ē-ghō/",
+        "vibe_tags": [
+            "precious",
+            "value",
+            "wealth"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Prosperity"
+        }
+    },
+    {
+        "name": "Orobosa",
+        "primary_meaning": "It is in God's hands",
+        "contextual_meaning": "Trusting in divine outcomes.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Oro (It is) + Osa (God)",
+        "gender": "Neutral",
+        "pronunciation": "/ō-rō-bō-sā/",
+        "vibe_tags": [
+            "peace",
+            "faith",
+            "trust"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Philosophical"
+        }
+    },
+    {
+        "name": "Aisosa",
+        "primary_meaning": "Nothing exceeds God",
+        "contextual_meaning": "Acknowledgment of God's supremacy.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Ais (Nothing) + Osa (God)",
+        "gender": "Neutral",
+        "pronunciation": "/ā-ē-sō-sā/",
+        "vibe_tags": [
+            "supreme",
+            "spiritual",
+            "reverence"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Theological"
+        }
+    },
+    {
+        "name": "Osahon",
+        "primary_meaning": "God listens",
+        "contextual_meaning": "Faith that God hears the prayers of the parents.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Osa (God) + Hon (Listens)",
+        "gender": "Neutral",
+        "pronunciation": "/ō-sā-hōn/",
+        "vibe_tags": [
+            "attentive",
+            "spiritual",
+            "peace"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Theophoric"
+        }
+    },
+    {
+        "name": "Eghosa",
+        "primary_meaning": "God's time",
+        "contextual_meaning": "Divine timing is perfect.",
+        "region_origin": "Edo State",
+        "ethnicity_tribe": "Edo",
+        "linguistic_root": "Egho (Time) + Osa (God)",
+        "gender": "Neutral",
+        "pronunciation": "/ē-ghō-sā/",
+        "vibe_tags": [
+            "patient",
+            "spiritual",
+            "classic"
+        ],
+        "etymology": {
+            "language": "Edo",
+            "context": "Faith"
+        }
+    }
+]
