@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { headers } from 'next/headers';
+import { createClient } from '@/utils/supabase/server';
+import { rateLimit } from '@/lib/rateLimiter';
 import postgres from 'postgres';
 
 // -----------------------------------------------------------------------
@@ -15,9 +18,7 @@ export interface NameSearchResult {
 }
 
 // -----------------------------------------------------------------------
-// DB client — created lazily outside the handler so it's reused
-// across requests in the same long-lived serverless instance.
-// Using the direct pooler URL from DATABASE_URL (same as seed scripts).
+// DB client — created lazily, reused across requests in the same instance
 // -----------------------------------------------------------------------
 function getDb() {
   if (!process.env.DATABASE_URL) {
@@ -41,11 +42,59 @@ export async function POST(request: Request) {
   let query = '';
 
   try {
+    // ------------------------------------------------------------------
+    // 1. Content-Type guard
+    // ------------------------------------------------------------------
+    const contentType = request.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) {
+      return NextResponse.json(
+        { error: 'Content-Type must be application/json.' },
+        { status: 415 }
+      );
+    }
+
+    // ------------------------------------------------------------------
+    // 2. Authentication — require a valid Supabase session
+    // ------------------------------------------------------------------
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Authentication required. Please sign in.' },
+        { status: 401 }
+      );
+    }
+
+    // ------------------------------------------------------------------
+    // 3. Rate limiting — 20 requests per user per minute (search is cheaper)
+    // ------------------------------------------------------------------
+    const headersList = await headers();
+    const ip =
+      headersList.get('x-forwarded-for')?.split(',')[0].trim() ??
+      headersList.get('x-real-ip') ??
+      user.id;
+
+    if (!rateLimit(ip, 20, 60_000)) {
+      return NextResponse.json(
+        { error: 'Too many requests. Please wait a moment and try again.' },
+        { status: 429 }
+      );
+    }
+
+    // ------------------------------------------------------------------
+    // 4. Parse & validate body
+    // ------------------------------------------------------------------
     const body = await request.json();
     query = (body?.query ?? '').trim();
 
     if (!query) {
       return NextResponse.json({ error: 'Query is required.' }, { status: 400 });
+    }
+    if (query.length > 200) {
+      return NextResponse.json(
+        { error: 'Query must be 200 characters or fewer.' },
+        { status: 400 }
+      );
     }
 
     if (!process.env.QWEN_API_KEY) {
@@ -56,8 +105,8 @@ export async function POST(request: Request) {
     }
 
     // ------------------------------------------------------------------
-    // Step 1: Embed the user query with Qwen text-embedding-v3
-    // Dimensions set to 1536 to match existing vector(1536) DB column.
+    // 5. Embed the user query with Qwen text-embedding-v3
+    //    Dimensions: 1024 — matches the DB vector(1024) column
     // ------------------------------------------------------------------
     const qwen = new OpenAI({
       apiKey: process.env.QWEN_API_KEY!,
@@ -73,7 +122,7 @@ export async function POST(request: Request) {
     const embeddingValues = embeddingResponse.data?.[0]?.embedding;
     if (!embeddingValues || embeddingValues.length !== 1024) {
       throw new Error(
-        `Invalid embedding returned from Qwen API. Expected 1024 values, got ${embeddingValues?.length ?? 0}.`
+        `Invalid embedding from Qwen API. Expected 1024 values, got ${embeddingValues?.length ?? 0}.`
       );
     }
 
@@ -81,7 +130,7 @@ export async function POST(request: Request) {
     const embeddingString = `[${embeddingValues.join(',')}]`;
 
     // ------------------------------------------------------------------
-    // Step 2: Call match_names DB function
+    // 6. Call match_names DB function
     // ------------------------------------------------------------------
     const sql = getDb();
 
@@ -95,10 +144,7 @@ export async function POST(request: Request) {
         )
       `;
 
-      return NextResponse.json({
-        query,
-        results,
-      });
+      return NextResponse.json({ query, results });
     } finally {
       await sql.end();
     }

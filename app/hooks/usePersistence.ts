@@ -39,10 +39,17 @@ export function usePersistence() {
   }, [supabase]);
 
   const loadFromLocal = () => {
-    const saved = localStorage.getItem("namefind_saved");
-    const history = localStorage.getItem("namefind_history");
-    if (saved) setSavedNames(JSON.parse(saved));
-    if (history) setSearchHistory(JSON.parse(history));
+    try {
+      const saved = localStorage.getItem("namefind_saved");
+      const history = localStorage.getItem("namefind_history");
+      if (saved) setSavedNames(JSON.parse(saved));
+      if (history) setSearchHistory(JSON.parse(history));
+    } catch (e) {
+      // Corrupted localStorage data — reset to clean state
+      console.warn('[usePersistence] Failed to parse localStorage, resetting.', e);
+      localStorage.removeItem("namefind_saved");
+      localStorage.removeItem("namefind_history");
+    }
   }
 
   const loadFromSupabase = async (userId: string) => {

@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import { createClient } from '@supabase/supabase-js';
+import { headers } from 'next/headers';
+import { createClient } from '@/utils/supabase/server';
+import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { z } from 'zod';
+import { rateLimit } from '@/lib/rateLimiter';
 
 // ----------------------------------------------------------------------
 // SCHEMA DEFINITION
@@ -23,7 +26,6 @@ const NameResultSchema = z.object({
   ),
 });
 
-// Extract the type for use elsewhere in your app
 type NameResponse = z.infer<typeof NameResultSchema>;
 
 // ----------------------------------------------------------------------
@@ -83,10 +85,52 @@ Include short meanings for list view, and detailed etymologies/migration data fo
 }
 
 export async function POST(request: Request) {
-  // Extract query early to avoid "any" hacks in catch block
   let currentQuery = 'Unknown';
   let currentType = 'vibe';
+
   try {
+    // ------------------------------------------------------------------
+    // 1. Content-Type guard
+    // ------------------------------------------------------------------
+    const contentType = request.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) {
+      return NextResponse.json(
+        { error: 'Content-Type must be application/json.' },
+        { status: 415 }
+      );
+    }
+
+    // ------------------------------------------------------------------
+    // 2. Authentication — require a valid Supabase session
+    // ------------------------------------------------------------------
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Authentication required. Please sign in.' },
+        { status: 401 }
+      );
+    }
+
+    // ------------------------------------------------------------------
+    // 3. Rate limiting — 10 requests per user per minute
+    // ------------------------------------------------------------------
+    const headersList = await headers();
+    const ip =
+      headersList.get('x-forwarded-for')?.split(',')[0].trim() ??
+      headersList.get('x-real-ip') ??
+      user.id; // fall back to user ID so auth bypass doesn't help
+
+    if (!rateLimit(ip, 10, 60_000)) {
+      return NextResponse.json(
+        { error: 'Too many requests. Please wait a moment and try again.' },
+        { status: 429 }
+      );
+    }
+
+    // ------------------------------------------------------------------
+    // 4. Parse & validate body
+    // ------------------------------------------------------------------
     const body = await request.json();
     currentQuery = (body.query || '').trim();
     currentType = body.type || 'vibe';
@@ -94,19 +138,29 @@ export async function POST(request: Request) {
     if (!currentQuery) {
       return NextResponse.json({ error: 'Query is required.' }, { status: 400 });
     }
+    if (currentQuery.length > 300) {
+      return NextResponse.json(
+        { error: 'Query must be 300 characters or fewer.' },
+        { status: 400 }
+      );
+    }
 
     if (!process.env.QWEN_API_KEY) {
       return NextResponse.json({ error: 'Server configuration error.' }, { status: 500 });
     }
 
-    // Check cache first
+    // ------------------------------------------------------------------
+    // 5. Check cache
+    // ------------------------------------------------------------------
     const cacheKey = `${currentType}::${currentQuery.toLowerCase()}`;
     const cached = getCached(cacheKey);
     if (cached) {
       return NextResponse.json(cached);
     }
 
-    // Initialize Qwen client (OpenAI-compatible)
+    // ------------------------------------------------------------------
+    // 6. Call Qwen with retry logic
+    // ------------------------------------------------------------------
     const qwen = new OpenAI({
       apiKey: process.env.QWEN_API_KEY!,
       baseURL: process.env.QWEN_BASE_URL || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
@@ -114,9 +168,7 @@ export async function POST(request: Request) {
 
     const userPrompt = buildUserPrompt(currentQuery, currentType);
 
-    // Call Qwen with retry logic — the model occasionally returns empty output
-    // ("model output must contain either output text or tool calls").
-    // Retrying with exponential backoff resolves this transiently.
+    // Qwen occasionally returns empty output — retry up to 3× with backoff
     const MAX_RETRIES = 3;
     let rawText = '';
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -132,8 +184,8 @@ export async function POST(request: Request) {
       rawText = completion.choices[0]?.message?.content ?? '';
       if (rawText) break;
       if (attempt < MAX_RETRIES) {
-        console.warn(`[Namefind] Qwen returned empty output (attempt ${attempt}/${MAX_RETRIES}), retrying...`);
-        await new Promise(r => setTimeout(r, attempt * 500)); // 500ms, 1000ms
+        console.warn(`[Namefind] Empty output (attempt ${attempt}/${MAX_RETRIES}), retrying...`);
+        await new Promise(r => setTimeout(r, attempt * 500));
       }
     }
 
@@ -141,7 +193,7 @@ export async function POST(request: Request) {
       throw new Error('Qwen returned empty output after 3 attempts. Please try again.');
     }
 
-    // Resilient JSON parsing (strips markdown fences if the model adds them)
+    // Strip markdown fences if the model adds them
     const cleanedText = rawText.replace(/```json\n?|```/g, '').trim();
     const data = JSON.parse(cleanedText);
 
@@ -149,14 +201,13 @@ export async function POST(request: Request) {
       throw new Error('Qwen returned an incomplete data structure.');
     }
 
-    // Store in cache
     cache.set(cacheKey, { data, ts: Date.now() });
 
-    // ----------------------------------------------------------------------
-    // INSERT INTO SUPABASE
-    // ----------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // 7. Insert into Supabase (fire-and-forget)
+    // ------------------------------------------------------------------
     if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      const supabaseAdmin = createClient(
+      const supabaseAdmin = createAdminClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.SUPABASE_SERVICE_ROLE_KEY!
       );
@@ -171,10 +222,9 @@ export async function POST(request: Request) {
         gender: r.gender || null,
         pronunciation: r.pronunciation || null,
         vibe_tags: data.query_tags || [],
-        etymology: r.etymology_node || r.migration_data || null
+        etymology: r.etymology_node || r.migration_data || null,
       }));
 
-      // Fire and forget insert to avoid blocking the response to the user
       supabaseAdmin.from('names').insert(namesToInsert).then(({ error }: any) => {
         if (error) console.error('[Supabase Insert Error]:', error);
       });
@@ -182,45 +232,45 @@ export async function POST(request: Request) {
       console.warn('[Supabase] SUPABASE_SERVICE_ROLE_KEY missing. Skipping DB insert.');
     }
 
-    // Ensure frontend backward compatibility for components expecting short_meaning
+    // Ensure backward compatibility for components expecting short_meaning
     data.results = data.results.map((r: any) => ({
       ...r,
-      short_meaning: r.primary_meaning || r.short_meaning || ''
+      short_meaning: r.primary_meaning || r.short_meaning || '',
     }));
 
     return NextResponse.json(data);
 
   } catch (error: any) {
-    console.error('[Namefind API Error Detailed]', error);
+    console.error('[Namefind API Error]', error);
 
-    // DYNAMIC MOCK FALLBACK for Rate Limits
-    const isRateLimit = error?.status === 429 || error?.response?.status === 429 || error?.message?.includes('429');
+    const isRateLimit =
+      error?.status === 429 ||
+      error?.response?.status === 429 ||
+      error?.message?.includes('429');
 
     if (isRateLimit) {
       const q = currentQuery || 'Unknown';
       const capitalized = q.charAt(0).toUpperCase() + q.slice(1);
-
-      const mockData = {
-        "query_tags": ["QUOTA_EXCEEDED", "MOCK_MODE", q.toUpperCase()],
-        "results": [
+      return NextResponse.json({
+        query_tags: ['QUOTA_EXCEEDED', 'MOCK_MODE', q.toUpperCase()],
+        results: [
           {
-            "name": capitalized,
-            "short_meaning": "Semantic placeholder (Rate Limited)",
-            "etymology": `This is a synthesized placeholder for "${capitalized}" because the API quota has been reached. Please try again later for real linguistic data.`,
-            "migration_data": [{ "region": "Local Environment", "era": "Modern", "coordinates": [0, 0] }]
+            name: capitalized,
+            short_meaning: 'Semantic placeholder (Rate Limited)',
+            etymology: `Placeholder for "${capitalized}" — API quota reached. Please try again later.`,
           },
           {
-            "name": capitalized + "ian",
-            "short_meaning": "Variant placeholder",
-            "etymology": `A suffix-derived variant of ${capitalized}.`,
-            "migration_data": [{ "region": "Linguistic Space", "era": "Modern", "coordinates": [0, 0] }]
-          }
-        ]
-      };
-      return NextResponse.json(mockData);
+            name: capitalized + 'ian',
+            short_meaning: 'Variant placeholder',
+            etymology: `A suffix-derived variant of ${capitalized}.`,
+          },
+        ],
+      });
     }
 
-    const userMessage = error?.message || 'Failed to process onomastic request.';
-    return NextResponse.json({ error: userMessage }, { status: 500 });
+    return NextResponse.json(
+      { error: error?.message || 'Failed to process onomastic request.' },
+      { status: 500 }
+    );
   }
 }
