@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import { headers } from 'next/headers';
 import { createClient } from '@/utils/supabase/server';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { z } from 'zod';
@@ -113,15 +112,10 @@ export async function POST(request: Request) {
     }
 
     // ------------------------------------------------------------------
-    // 3. Rate limiting — 10 requests per user per minute
+    // 3. Rate limiting — 30 requests per user per minute
+    //    Keyed by user ID (not IP) since auth is already enforced above.
     // ------------------------------------------------------------------
-    const headersList = await headers();
-    const ip =
-      headersList.get('x-forwarded-for')?.split(',')[0].trim() ??
-      headersList.get('x-real-ip') ??
-      user.id; // fall back to user ID so auth bypass doesn't help
-
-    if (!rateLimit(ip, 10, 60_000)) {
+    if (!rateLimit(user.id, 30, 60_000)) {
       return NextResponse.json(
         { error: 'Too many requests. Please wait a moment and try again.' },
         { status: 429 }

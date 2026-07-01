@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import { headers } from 'next/headers';
 import { createClient } from '@/utils/supabase/server';
 import { rateLimit } from '@/lib/rateLimiter';
 import postgres from 'postgres';
@@ -66,15 +65,10 @@ export async function POST(request: Request) {
     }
 
     // ------------------------------------------------------------------
-    // 3. Rate limiting — 20 requests per user per minute (search is cheaper)
+    // 3. Rate limiting — 60 requests per user per minute
+    //    Keyed by user ID (not IP) since auth is already enforced above.
     // ------------------------------------------------------------------
-    const headersList = await headers();
-    const ip =
-      headersList.get('x-forwarded-for')?.split(',')[0].trim() ??
-      headersList.get('x-real-ip') ??
-      user.id;
-
-    if (!rateLimit(ip, 20, 60_000)) {
+    if (!rateLimit(user.id, 60, 60_000)) {
       return NextResponse.json(
         { error: 'Too many requests. Please wait a moment and try again.' },
         { status: 429 }
