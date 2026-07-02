@@ -37,7 +37,7 @@ function ResultsContent() {
         if (!res.ok) throw new Error(json.error || "Failed to fetch");
         
         setData(json);
-        addHistory(query); // Record search in history
+        addHistory(query); // Record search in history — safe: addHistory is now stable (useCallback)
       } catch (err: any) {
         setError(err.message);
       } finally {
@@ -46,7 +46,12 @@ function ResultsContent() {
     };
 
     fetchResults();
-  }, [query, router, addHistory]);
+    // ✅ Only re-run when the actual search parameters change.
+    // `addHistory` and `router` are intentionally excluded — they are stable
+    // references that should never trigger a new search fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, type]);
+
 
   if (loading) {
     return (
