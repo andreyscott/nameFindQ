@@ -10,11 +10,35 @@ import type { NameSearchResult } from '../api/search/route';
 
 type SearchMode = 'vibe' | 'blend' | 'semantic';
 
-const TABS: { id: SearchMode; label: string }[] = [
-  { id: 'vibe',     label: 'vibe'     },
-  { id: 'blend',    label: 'blend'    },
-  { id: 'semantic', label: 'semantic' },
+// ── Tab definitions + micro-copy ─────────────────────────────────────────
+const TABS: { id: SearchMode; label: string; hint: string }[] = [
+  { id: 'vibe',     label: 'vibe',     hint: 'Describe a feeling or origin'  },
+  { id: 'blend',    label: 'blend',    hint: 'Combine two name roots'         },
+  { id: 'semantic', label: 'semantic', hint: 'Search by meaning or culture'   },
 ];
+
+// ── Suggestion pills per mode ─────────────────────────────────────────────
+const PILLS: Record<SearchMode, string[]> = {
+  vibe: [
+    'Born on a Friday',
+    'Warrior',
+    'Gift of God',
+    'Peaceful river',
+    'Igbo names meaning wealth',
+    'Strong like oak',
+    'Daughter of the king',
+  ],
+  blend: [
+    'Yoruba + Celtic',
+    'Edo + Gaelic',
+    'Igbo + Norse',
+    'African + Scandinavian',
+  ],
+  semantic: [],
+};
+
+// ── Terracotta accent — used only for active UI states ────────────────────
+const ACCENT = '#C1694F';
 
 export function MonolithSearch() {
   const [isFocused, setIsFocused] = useState(false);
@@ -42,6 +66,7 @@ export function MonolithSearch() {
 
   const handleModeSwitch = (mode: SearchMode) => {
     setSearchMode(mode);
+    setValue('');
     // Clear semantic results when leaving semantic tab
     if (mode !== 'semantic') {
       setSemanticResults([]);
@@ -49,27 +74,51 @@ export function MonolithSearch() {
     }
   };
 
+  // Clicking a suggestion pill instantly triggers the search
+  const handlePill = (pill: string) => {
+    setValue(pill);
+    router.push(`/results?q=${encodeURIComponent(pill)}&type=${searchMode}`);
+  };
+
   return (
     <div className="relative w-full max-w-3xl mx-auto flex flex-col items-center justify-center z-10">
-      {/* ── Tab Toggle ────────────────────────────────────────── */}
+
+      {/* ── Tab Toggle with micro-copy ─────────────────────────────── */}
       <div className="flex gap-8 mb-8">
-        {TABS.map(({ id, label }) => (
+        {TABS.map(({ id, label, hint }) => (
           <button
             key={id}
             id={`tab-${id}`}
             onClick={() => handleModeSwitch(id)}
-            className={`font-mono text-[10px] tracking-[0.3em] uppercase transition-all pb-1 border-b ${
-              searchMode === id
-                ? 'text-black border-black'
-                : 'text-black/20 border-transparent hover:text-black/40'
-            }`}
+            className="flex flex-col items-center gap-1"
+            aria-pressed={searchMode === id}
           >
-            {label}
+            {/* Tab label */}
+            <span
+              className={`font-mono text-[10px] tracking-[0.3em] uppercase transition-all pb-1 border-b ${
+                searchMode === id
+                  ? 'border-[#C1694F] text-[#C1694F]'
+                  : 'text-black/20 border-transparent hover:text-black/40'
+              }`}
+            >
+              {label}
+            </span>
+            {/* Micro-copy — visible only on active tab */}
+            <span
+              className={`font-mono text-[8px] tracking-[0.1em] lowercase transition-all duration-300 whitespace-nowrap ${
+                searchMode === id
+                  ? 'opacity-100 text-black/30 max-h-4'
+                  : 'opacity-0 max-h-0'
+              }`}
+              aria-hidden="true"
+            >
+              {hint}
+            </span>
           </button>
         ))}
       </div>
 
-      {/* ── Panel: Vibe / Blend (existing LLM route) ─────────── */}
+      {/* ── Panel: Vibe / Blend ────────────────────────────────────── */}
       <AnimatePresence mode="wait">
         {(searchMode === 'vibe' || searchMode === 'blend') && (
           <motion.div
@@ -94,7 +143,7 @@ export function MonolithSearch() {
                 spellCheck={false}
                 autoComplete="off"
               />
-              {/* Cyan focus underline */}
+              {/* Cyan focus underline — kept (serves input-focus purpose, not selection) */}
               <motion.div
                 className="absolute bottom-0 left-1/2 h-[1px] bg-[#38BDF8] shadow-[0_0_10px_rgba(56,189,248,0.8)]"
                 initial={{ width: 0, x: '-50%' }}
@@ -106,11 +155,35 @@ export function MonolithSearch() {
               />
             </div>
 
+            {/* ── Suggestion pills — zero state only ───────────────── */}
+            <AnimatePresence>
+              {!value && PILLS[searchMode].length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.25 }}
+                  className="w-full flex flex-wrap justify-center gap-2 mb-6"
+                  aria-label="Example searches"
+                >
+                  {PILLS[searchMode].map((pill) => (
+                    <button
+                      key={pill}
+                      onClick={() => handlePill(pill)}
+                      className="border border-black/10 text-[9px] font-mono tracking-[0.15em] uppercase px-3 py-1.5 text-black/50 hover:border-black/40 hover:text-black hover:bg-black/[0.02] transition-all"
+                    >
+                      {pill}
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             <VibeScanner isTyping={isTyping} />
           </motion.div>
         )}
 
-        {/* ── Panel: Semantic RAG search ────────────────────────── */}
+        {/* ── Panel: Semantic RAG search ───────────────────────────── */}
         {searchMode === 'semantic' && (
           <motion.div
             key="semantic-search"

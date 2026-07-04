@@ -77,7 +77,7 @@ export function SearchResults({ results, query, isLoading }: SearchResultsProps)
         <p className="font-mono text-[10px] tracking-[0.3em] text-black/40 uppercase">
           No semantic matches found
         </p>
-        <p className="mt-2 text-sm text-black/30 font-serif">
+        <p className="mt-2 text-sm text-black/50 font-serif">
           Try rephrasing your query — e.g. add a tribe name or describe a feeling.
         </p>
       </motion.div>

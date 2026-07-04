@@ -228,7 +228,7 @@ function ResultsContent() {
                     title={saved ? "Remove from saved" : "Save to collection"}
                     className={`w-9 h-9 flex items-center justify-center border transition-all duration-200
                       ${saved
-                        ? "border-black bg-black text-white"
+                        ? "border-[#C1694F] bg-[#C1694F] text-white"
                         : "border-black/20 text-black/30 hover:border-black hover:text-black"
                       }
                       ${isSavingThis ? "opacity-40 cursor-wait" : ""}
