@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo, use } from "react";
 import { motion } from "framer-motion";
 import { VibeScanner } from "../../components/VibeScanner";
 import { usePersistence } from "../../hooks/usePersistence";
 import { createClient } from "../../../utils/supabase/client";
 
-export default function NameDetailsPage({ params }: { params: { id: string } }) {
-  const nameId = decodeURIComponent(params.id);
+export default function NameDetailsPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const nameId = decodeURIComponent(id);
   const { toggleSave, isSaved } = usePersistence();
-  const supabase = createClient();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const supabase = useMemo(() => createClient(), []);
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);

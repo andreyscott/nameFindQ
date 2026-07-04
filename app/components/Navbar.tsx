@@ -171,7 +171,7 @@ export function Navbar() {
               transition={{ type: "spring", bounce: 0, duration: 0.4 }}
               className="fixed top-0 left-0 bottom-0 w-64 md:w-80 bg-white border-r border-black/10 z-50 p-6 flex flex-col"
             >
-              <div className="flex justify-between items-center mb-12">
+              <div className="flex justify-between items-center mb-10">
                 <span className="font-serif text-sm tracking-[0.2em] uppercase text-black/50">Menu</span>
                 <button
                   onClick={() => setIsOpen(false)}
@@ -197,21 +197,23 @@ export function Navbar() {
                 ))}
               </div>
 
-              {/* Auth section at bottom of drawer */}
-              <div className="mt-auto pt-8 border-t border-black/10">
+              {/* Auth section — sits directly below nav links, always visible */}
+              <div className="mt-8 pt-6 border-t border-black/10">
                 {user ? (
-                  <div className="flex flex-col gap-3">
-                    <p className="text-[10px] font-mono uppercase tracking-[0.15em] text-black/40 truncate">{user.email}</p>
+                  <div className="flex flex-col gap-2">
+                    <p className="text-[9px] font-mono uppercase tracking-[0.2em] text-black/30 truncate mb-1">
+                      {user.email}
+                    </p>
                     <Link
                       href="/profile"
                       onClick={() => setIsOpen(false)}
-                      className="font-serif text-lg text-black hover:opacity-50 transition-opacity"
+                      className="font-serif text-xl text-black hover:opacity-50 transition-opacity"
                     >
                       Profile
                     </Link>
                     <button
                       onClick={() => { handleSignOut(); setIsOpen(false); }}
-                      className="text-left font-serif text-lg text-black hover:opacity-50 transition-opacity"
+                      className="text-left font-serif text-xl text-black/50 hover:opacity-50 transition-opacity"
                     >
                       Sign Out
                     </button>
@@ -220,7 +222,7 @@ export function Navbar() {
                   <Link
                     href="/login"
                     onClick={() => setIsOpen(false)}
-                    className="font-serif text-lg text-black hover:opacity-50 transition-opacity"
+                    className="font-serif text-xl text-black hover:opacity-50 transition-opacity"
                   >
                     Login
                   </Link>
