@@ -251,7 +251,7 @@ export async function POST(request: Request) {
             ethnicity_tribe: aiData.tribe,
           })
           .eq('id', dbRow.id) // Precise single-row update via PK, not ilike
-          .then(({ error }) => {
+          .then(({ error }: any) => {
             if (error) console.warn('[Tree] DB enrichment write failed:', error.message);
             else console.log(`[Tree] Enriched DB row id=${dbRow.id} for "${name}"`);
           });
