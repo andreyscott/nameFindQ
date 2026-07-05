@@ -1,13 +1,11 @@
 import { NextResponse } from 'next/server';
-import OpenAI from 'openai';
 import { createClient } from '@/utils/supabase/server';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import { rateLimit } from '@/lib/rateLimiter';
+import { getQwenClient } from '@/lib/qwenClient';
 
-// ----------------------------------------------------------------------
-// SCHEMA DEFINITION
-// ----------------------------------------------------------------------
+// ── Schema ────────────────────────────────────────────────────────────────────
 const NameResultSchema = z.object({
   query_tags: z.array(z.string()),
   results: z.array(
@@ -27,188 +25,220 @@ const NameResultSchema = z.object({
 
 type NameResponse = z.infer<typeof NameResultSchema>;
 
-// ----------------------------------------------------------------------
-// SYSTEM PROMPT — Onomastic Expert Core
-// ----------------------------------------------------------------------
-const SYSTEM_PROMPT = `You are the "Namefind" system core: an elite onomastic expert, linguistic historian, and aesthetic synthesizer.
+// ── Condensed system prompt — ~47% fewer tokens vs previous version ───────────
+// Compact schema notation eliminates prose while enforcing the same output shape.
+const SYSTEM_PROMPT = `Onomastic AI. Output ONLY valid JSON — no markdown, no fences, no extra text.
 
-You deeply analyze phonetic resonance, etymological roots, and historical migration paths of names.
+Schema (all fields required in results):
+{"query_tags":["TAG1","TAG2","TAG3"],"results":[{"name":"","primary_meaning":"literal translation","contextual_meaning":"cultural usage context","region_origin":"e.g. Nigeria (South West)","ethnicity_tribe":"e.g. Yoruba","linguistic_root":"e.g. Oluwa(God)+Se(did)+Un(it)","gender":"Masculine|Feminine|Neutral","pronunciation":"IPA or readable phonetic","etymology_node":{"era":"historical period","historical_context":"1-2 sentences"}}]}
 
-RULES:
-- Always respond with ONLY a valid JSON object — no markdown, no code fences, no explanation outside the JSON.
-- Use exactly this structure:
+Return 5 results for vibe queries, 3 for blend queries.`;
 
-{
-  "query_tags": ["TAG_ONE", "TAG_TWO", "TAG_THREE"],
-  "results": [
-    {
-      "name": "string — the primary name result",
-      "primary_meaning": "string — literal translation (e.g. 'God has done it')",
-      "contextual_meaning": "string — when/how it is given (e.g. 'Used when a child is born after a long wait')",
-      "region_origin": "string — geographic data (e.g. 'Nigeria (South West)')",
-      "ethnicity_tribe": "string — cultural group (e.g. 'Yoruba')",
-      "linguistic_root": "string — base words (e.g. 'Oluwa (God) + Se (did) + Un (it)')",
-      "gender": "string — e.g. 'Masculine', 'Feminine', 'Neutral'",
-      "pronunciation": "string — phonetic pronunciation",
-      "etymology_node": { "era": "string", "historical_context": "string" }
-    }
-  ]
-}`;
-
-// ----------------------------------------------------------------------
-// IN-MEMORY CACHE — saves quota on repeated queries
-// ----------------------------------------------------------------------
+// ── In-memory result cache (1 hour TTL) ──────────────────────────────────────
 const cache = new Map<string, { data: NameResponse; ts: number }>();
-const CACHE_TTL_MS = 1000 * 60 * 60; // 1 hour
+const CACHE_TTL_MS = 60 * 60 * 1000;
 
-function getCached(key: string) {
+function getCached(key: string): NameResponse | null {
   const entry = cache.get(key);
   if (!entry) return null;
   if (Date.now() - entry.ts > CACHE_TTL_MS) { cache.delete(key); return null; }
   return entry.data;
 }
 
-// ----------------------------------------------------------------------
-// PROMPT BUILDER — type-specific prompt engineering
-// ----------------------------------------------------------------------
-function buildUserPrompt(query: string, type: string): string {
-  if (type === 'blend') {
-    return `You are blending two linguistic roots into a single synthesized name.
-Input: ${query}
-Task: Merge the phonetic and semantic qualities of both roots into one elegant new name.
-Return exactly 3 synthesized name variations with their etymologies and shared aesthetic tags.`;
+// ── DB-first lookup — returns results from Supabase if rich enough ────────────
+// Fires only for vibe/semantic modes (blend always needs AI synthesis).
+// Matches against primary_meaning, contextual_meaning, and ethnicity_tribe.
+async function tryDbFirst(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  query: string,
+  type: string
+): Promise<NameResponse | null> {
+  if (type === 'blend') return null; // Synthesized names always need AI
+
+  // Extract meaningful keywords (skip stopwords and short words)
+  const stopwords = new Set(['names', 'name', 'with', 'that', 'from', 'the', 'and', 'for', 'are']);
+  const keywords = query
+    .toLowerCase()
+    .split(/[\s,+]+/)
+    .filter(w => w.length > 3 && !stopwords.has(w))
+    .slice(0, 3);
+
+  if (keywords.length === 0) return null;
+
+  // Run keyword searches in parallel for speed
+  const searches = keywords.map(kw =>
+    supabase
+      .from('names')
+      .select('name, primary_meaning, contextual_meaning, region_origin, ethnicity_tribe, linguistic_root, gender, pronunciation, etymology, vibe_tags')
+      .or(`primary_meaning.ilike.%${kw}%,contextual_meaning.ilike.%${kw}%,ethnicity_tribe.ilike.%${kw}%`)
+      .limit(5)
+  );
+
+  const settled = await Promise.all(searches);
+
+  // Merge and deduplicate by name
+  const seen = new Set<string>();
+  const merged: any[] = [];
+  for (const { data } of settled) {
+    for (const row of data ?? []) {
+      if (!seen.has(row.name)) {
+        seen.add(row.name);
+        merged.push(row);
+      }
+    }
   }
-  return `The user is searching for names related to this query: "${query}"
-Task: Return the 5 best matching names (real or synthesized) that fit this vibe or origin query.
-Include short meanings for list view, and detailed etymologies/migration data for the deep dive.`;
+
+  // Need at least 3 results to be useful
+  if (merged.length < 3) return null;
+
+  const results = merged.slice(0, 5).map((r: any) => ({
+    name: r.name,
+    primary_meaning: r.primary_meaning ?? '',
+    contextual_meaning: r.contextual_meaning ?? undefined,
+    region_origin: r.region_origin ?? undefined,
+    ethnicity_tribe: r.ethnicity_tribe ?? undefined,
+    linguistic_root: r.linguistic_root ?? undefined,
+    gender: r.gender ?? undefined,
+    pronunciation: r.pronunciation ?? undefined,
+    etymology_node: r.etymology ?? undefined,
+    short_meaning: r.primary_meaning ?? '',
+  }));
+
+  return {
+    query_tags: keywords.map(k => k.toUpperCase()),
+    results,
+  };
 }
 
+// ── User prompt builder ───────────────────────────────────────────────────────
+function buildUserPrompt(query: string, type: string): string {
+  if (type === 'blend') {
+    return `Blend query: "${query}". Merge phonetic and semantic qualities of both roots into 3 synthesized name variations with full etymologies.`;
+  }
+  return `Vibe query: "${query}". Return the 5 best matching names (real or synthesized) with etymologies and migration data.`;
+}
+
+// ── Lazy admin client — created only when a DB write is needed ────────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _admin: any = null;
+function getAdmin(): any {
+  if (!_admin && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    _admin = createAdminClient<any, any>(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+  }
+  return _admin;
+}
+
+// ── POST /api/namefind ────────────────────────────────────────────────────────
 export async function POST(request: Request) {
   let currentQuery = 'Unknown';
   let currentType = 'vibe';
 
   try {
-    // ------------------------------------------------------------------
     // 1. Content-Type guard
-    // ------------------------------------------------------------------
-    const contentType = request.headers.get('content-type') ?? '';
-    if (!contentType.includes('application/json')) {
-      return NextResponse.json(
-        { error: 'Content-Type must be application/json.' },
-        { status: 415 }
-      );
+    if (!(request.headers.get('content-type') ?? '').includes('application/json')) {
+      return NextResponse.json({ error: 'Content-Type must be application/json.' }, { status: 415 });
     }
 
-    // ------------------------------------------------------------------
-    // 2. Authentication — require a valid Supabase session
-    // ------------------------------------------------------------------
+    // 2. Auth
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-      return NextResponse.json(
-        { error: 'Authentication required. Please sign in.' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Authentication required. Please sign in.' }, { status: 401 });
     }
 
-    // ------------------------------------------------------------------
-    // 3. Rate limiting — 30 requests per user per minute
-    //    Keyed by user ID (not IP) since auth is already enforced above.
-    // ------------------------------------------------------------------
+    // 3. Rate limit (30 req/min per user)
     if (!rateLimit(user.id, 30, 60_000)) {
-      return NextResponse.json(
-        { error: 'Too many requests. Please wait a moment and try again.' },
-        { status: 429 }
-      );
+      return NextResponse.json({ error: 'Too many requests. Please wait a moment and try again.' }, { status: 429 });
     }
 
-    // ------------------------------------------------------------------
     // 4. Parse & validate body
-    // ------------------------------------------------------------------
     const body = await request.json();
     currentQuery = (body.query || '').trim();
     currentType = body.type || 'vibe';
 
-    if (!currentQuery) {
-      return NextResponse.json({ error: 'Query is required.' }, { status: 400 });
-    }
-    if (currentQuery.length > 300) {
-      return NextResponse.json(
-        { error: 'Query must be 300 characters or fewer.' },
-        { status: 400 }
-      );
-    }
+    if (!currentQuery) return NextResponse.json({ error: 'Query is required.' }, { status: 400 });
+    if (currentQuery.length > 300) return NextResponse.json({ error: 'Query must be 300 characters or fewer.' }, { status: 400 });
+    if (!process.env.QWEN_API_KEY) return NextResponse.json({ error: 'Server configuration error.' }, { status: 500 });
 
-    if (!process.env.QWEN_API_KEY) {
-      return NextResponse.json({ error: 'Server configuration error.' }, { status: 500 });
-    }
-
-    // ------------------------------------------------------------------
-    // 5. Check cache
-    // ------------------------------------------------------------------
+    // 5. In-memory cache
     const cacheKey = `${currentType}::${currentQuery.toLowerCase()}`;
     const cached = getCached(cacheKey);
-    if (cached) {
-      return NextResponse.json(cached);
+    if (cached) return NextResponse.json(cached);
+
+    // 6. ── DB-first lookup ─────────────────────────────────────────────────
+    // Avoids AI call entirely when we already have matching names in Supabase.
+    const dbResult = await tryDbFirst(supabase, currentQuery, currentType);
+    if (dbResult) {
+      console.log(`[Namefind] DB-first hit for query: "${currentQuery}" (${dbResult.results.length} results)`);
+      cache.set(cacheKey, { data: dbResult, ts: Date.now() });
+      return NextResponse.json(dbResult);
     }
 
-    // ------------------------------------------------------------------
-    // 6. Call Qwen with retry logic
-    // ------------------------------------------------------------------
-    const qwen = new OpenAI({
-      apiKey: process.env.QWEN_API_KEY!,
-      baseURL: process.env.QWEN_BASE_URL || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
-    });
-
+    // 7. ── Call Qwen with retry + 12s timeout ─────────────────────────────
+    const qwen = getQwenClient();
     const userPrompt = buildUserPrompt(currentQuery, currentType);
-
-    // Qwen occasionally returns empty output — retry up to 3× with backoff
     const MAX_RETRIES = 3;
     let rawText = '';
+
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      const completion = await qwen.chat.completions.create({
-        model: 'qwen-max',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userPrompt },
-        ],
-        temperature: 0.8,
-        top_p: 0.95,
-      });
-      rawText = completion.choices[0]?.message?.content ?? '';
-      if (rawText) break;
-      if (attempt < MAX_RETRIES) {
-        console.warn(`[Namefind] Empty output (attempt ${attempt}/${MAX_RETRIES}), retrying...`);
-        await new Promise(r => setTimeout(r, attempt * 500));
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12_000);
+
+      try {
+        const completion = await qwen.chat.completions.create(
+          {
+            model: 'qwen-max',
+            messages: [
+              { role: 'system', content: SYSTEM_PROMPT },
+              { role: 'user', content: userPrompt },
+            ],
+            temperature: 0.3,   // Lower = more reliable JSON structure
+            top_p: 0.85,
+          },
+          { signal: controller.signal }
+        );
+        clearTimeout(timeoutId);
+        rawText = completion.choices[0]?.message?.content ?? '';
+        if (rawText) break;
+      } catch (err: any) {
+        clearTimeout(timeoutId);
+        const isAbort = err.name === 'AbortError' || err.code === 'ERR_CANCELED';
+        console.warn(`[Namefind] Attempt ${attempt}/${MAX_RETRIES} failed: ${isAbort ? 'timeout (12s)' : err.message}`);
+        if (attempt === MAX_RETRIES) throw new Error('AI failed after 3 attempts. Please try again.');
       }
+
+      if (!rawText && attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, attempt * 400));
     }
 
-    if (!rawText) {
-      throw new Error('Qwen returned empty output after 3 attempts. Please try again.');
-    }
+    if (!rawText) throw new Error('Qwen returned empty output after 3 attempts.');
 
-    // Strip markdown fences if the model adds them
+    // 8. Parse
     const cleanedText = rawText.replace(/```json\n?|```/g, '').trim();
     const data = JSON.parse(cleanedText);
 
-    if (!data.query_tags || !data.results || !Array.isArray(data.results)) {
+    if (!data.query_tags || !Array.isArray(data.results)) {
       throw new Error('Qwen returned an incomplete data structure.');
     }
 
+    // Backward-compat alias
+    data.results = data.results.map((r: any) => ({
+      ...r,
+      short_meaning: r.primary_meaning || r.short_meaning || '',
+    }));
+
     cache.set(cacheKey, { data, ts: Date.now() });
 
-    // ------------------------------------------------------------------
-    // 7. Insert into Supabase (fire-and-forget)
-    // ------------------------------------------------------------------
-    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      const supabaseAdmin = createAdminClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
-      );
-
-      const namesToInsert = data.results.map((r: any) => ({
+    // 9. ── Upsert into Supabase (fire-and-forget) ──────────────────────────
+    // Uses upsert + onConflict so re-querying the same names enriches existing
+    // rows instead of creating duplicates.
+    const admin = getAdmin();
+    if (admin) {
+      const namesToUpsert = data.results.map((r: any) => ({
         name: r.name,
-        primary_meaning: r.primary_meaning || r.short_meaning || '',
+        primary_meaning: r.primary_meaning || '',
         contextual_meaning: r.contextual_meaning || null,
         region_origin: r.region_origin || null,
         ethnicity_tribe: r.ethnicity_tribe || null,
@@ -216,48 +246,38 @@ export async function POST(request: Request) {
         gender: r.gender || null,
         pronunciation: r.pronunciation || null,
         vibe_tags: data.query_tags || [],
-        etymology: r.etymology_node || r.migration_data || null,
+        etymology: r.etymology_node || null,
       }));
 
-      supabaseAdmin.from('names').insert(namesToInsert).then(({ error }: any) => {
-        if (error) console.error('[Supabase Insert Error]:', error);
-      });
+      admin
+        .from('names')
+        .upsert(namesToUpsert, { onConflict: 'name', ignoreDuplicates: false })
+        .then(({ error }: any) => {
+          if (error) console.error('[Namefind] Supabase upsert error:', error.message);
+          else console.log(`[Namefind] Upserted ${namesToUpsert.length} names to DB`);
+        });
     } else {
-      console.warn('[Supabase] SUPABASE_SERVICE_ROLE_KEY missing. Skipping DB insert.');
+      console.warn('[Namefind] SUPABASE_SERVICE_ROLE_KEY missing — skipping DB write.');
     }
-
-    // Ensure backward compatibility for components expecting short_meaning
-    data.results = data.results.map((r: any) => ({
-      ...r,
-      short_meaning: r.primary_meaning || r.short_meaning || '',
-    }));
 
     return NextResponse.json(data);
 
   } catch (error: any) {
-    console.error('[Namefind API Error]', error);
+    console.error('[Namefind] Error:', { query: currentQuery, message: error?.message });
 
-    const isRateLimit =
+    // Graceful degradation on Qwen rate-limit
+    if (
       error?.status === 429 ||
       error?.response?.status === 429 ||
-      error?.message?.includes('429');
-
-    if (isRateLimit) {
+      error?.message?.includes('429')
+    ) {
       const q = currentQuery || 'Unknown';
-      const capitalized = q.charAt(0).toUpperCase() + q.slice(1);
+      const cap = q.charAt(0).toUpperCase() + q.slice(1);
       return NextResponse.json({
-        query_tags: ['QUOTA_EXCEEDED', 'MOCK_MODE', q.toUpperCase()],
+        query_tags: ['RATE_LIMITED', q.toUpperCase()],
         results: [
-          {
-            name: capitalized,
-            short_meaning: 'Semantic placeholder (Rate Limited)',
-            etymology: `Placeholder for "${capitalized}" — API quota reached. Please try again later.`,
-          },
-          {
-            name: capitalized + 'ian',
-            short_meaning: 'Variant placeholder',
-            etymology: `A suffix-derived variant of ${capitalized}.`,
-          },
+          { name: cap, short_meaning: 'Quota reached — please try again shortly.', primary_meaning: 'Quota reached — please try again shortly.' },
+          { name: cap + 'ian', short_meaning: 'Variant placeholder', primary_meaning: 'Variant placeholder' },
         ],
       });
     }

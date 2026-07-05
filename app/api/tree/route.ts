@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import OpenAI from 'openai';
 import { createClient } from '@/utils/supabase/server';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { rateLimit } from '@/lib/rateLimiter';
+import { getQwenClient } from '@/lib/qwenClient';
 import { headers } from 'next/headers';
 
 // ── Tree Data Shape ───────────────────────────────────────────────────────────
@@ -24,87 +24,105 @@ export interface TreeData {
   tribe: string;
   branches: [TreeBranch, TreeBranch, TreeBranch];
   narrative: string;
-  source: 'db' | 'ai';
+  source: 'db' | 'ai' | 'fallback';
 }
 
-// ── Strict AI Prompt ──────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a professional onomastic historian and etymologist.
-Given a name and optional seed data, return ONLY a valid JSON object describing its
-linguistic origin tree. No markdown, no code fences, no text outside the JSON.
+// ── Condensed system prompt — ~42% fewer tokens vs previous version ───────────
+const SYSTEM_PROMPT = `Onomastic historian. Output ONLY valid JSON, no markdown.
 
-Required structure (all fields mandatory):
-{
-  "root_label": "Oldest proto-root and morpheme breakdown — e.g. 'Ada (Daughter) + Eze (King)' or '*leuk- (Light)'",
-  "root_meaning": "Core semantic meaning in 4 words or fewer",
-  "primary_epoch": "Historical period and culture — e.g. 'Pre-colonial Igbo', 'Classical Latin'",
-  "primary_context": "1-2 sentences explaining the cultural origin and usage context of this name",
-  "region": "Specific geographic region — e.g. 'Nigeria (South East)', 'Roman Empire (Italy)'",
-  "tribe": "Specific ethnic or cultural group — e.g. 'Igbo', 'Latin', 'Yoruba', 'Edo'",
-  "branches": [
-    {
-      "name": "A close linguistic variant or relative",
-      "meaning": "Its meaning in 3-5 words",
-      "variant_type": "Direct",
-      "sub_variant": "A further derived name from this branch",
-      "sub_variant_region": "Regional or cultural label — e.g. 'Romance', 'Modern English', 'Pan-Igbo'"
-    },
-    { "name": "...", "meaning": "...", "variant_type": "Extended",   "sub_variant": "...", "sub_variant_region": "..." },
-    { "name": "...", "meaning": "...", "variant_type": "Feminine",   "sub_variant": "...", "sub_variant_region": "..." }
-  ],
-  "narrative": "2-3 elegant scholarly sentences tracing this name's etymological journey across time and culture."
+Schema:
+{"root_label":"proto-root with morpheme breakdown e.g. Ada(Daughter)+Eze(King)","root_meaning":"≤4 words","primary_epoch":"period+culture e.g. Pre-colonial Igbo","primary_context":"1-2 sentences on cultural origin","region":"e.g. Nigeria (South East)","tribe":"e.g. Igbo","branches":[{"name":"variant","meaning":"3-5 words","variant_type":"Direct","sub_variant":"derived name","sub_variant_region":"regional label"},{"name":"","meaning":"","variant_type":"Extended","sub_variant":"","sub_variant_region":""},{"name":"","meaning":"","variant_type":"Feminine","sub_variant":"","sub_variant_region":""}],"narrative":"2-3 scholarly sentences on etymological journey."}
+
+RULES: branches = exactly 3 objects. variant_type ∈ {Direct,Extended,Feminine,Short Form,Modern}. All fields non-empty.`;
+
+// ── In-memory result cache (1 hour TTL) ──────────────────────────────────────
+const treeCache = new Map<string, { data: TreeData; ts: number }>();
+const CACHE_TTL_MS = 60 * 60 * 1000;
+
+function getCachedTree(name: string): TreeData | null {
+  const entry = treeCache.get(name.toLowerCase());
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_TTL_MS) { treeCache.delete(name.toLowerCase()); return null; }
+  return entry.data;
 }
 
-CRITICAL RULES:
-- branches MUST contain exactly 3 objects
-- All string fields MUST be non-empty
-- variant_type MUST be one of: Direct | Extended | Feminine | Short Form | Modern`;
-
-// ── Sufficiency Check — is Supabase data rich enough to skip the AI? ───────
+// ── Relaxed sufficiency check ─────────────────────────────────────────────────
+// Previous version required 3 related_variants (almost never present in DB).
+// Now: root + some context + region is enough to serve a rich tree from DB data.
 function isSufficient(data: any): boolean {
-  const hasRoot = typeof data.linguistic_root === 'string' &&
-    data.linguistic_root.includes('+') &&
-    data.linguistic_root.length > 10;
-
+  const hasRoot =
+    typeof data.linguistic_root === 'string' && data.linguistic_root.length > 8;
   const hasContext =
-    (data.etymology?.historical_context?.length ?? 0) > 40 ||
-    (data.contextual_meaning?.length ?? 0) > 40;
-
-  const hasThreeBranches =
-    Array.isArray(data.etymology?.related_variants) &&
-    data.etymology.related_variants.length >= 3;
-
+    (data.etymology?.historical_context?.length ?? 0) > 30 ||
+    (data.contextual_meaning?.length ?? 0) > 30;
   const hasRegion = !!(data.region_origin || data.ethnicity_tribe);
-
-  // Sufficient if we have root + region + (rich historical context OR 3+ variants)
-  return hasRoot && hasRegion && (hasContext && hasThreeBranches);
+  return hasRoot && hasContext && hasRegion;
 }
 
-// ── Map Supabase row → TreeData when data is sufficient ───────────────────
+// ── Map Supabase row → TreeData ───────────────────────────────────────────────
 function mapDbToTree(name: string, d: any): TreeData {
   const variants: string[] = d.etymology?.related_variants ?? [];
   const types: TreeBranch['variant_type'][] = ['Direct', 'Extended', 'Feminine'];
+  const tribe = d.ethnicity_tribe ?? d.region_origin ?? 'Regional';
 
   const branches = types.map((vt, i) => ({
     name: variants[i] ?? `${name}${['i', 'e', 'a'][i]}`,
     meaning: 'Linguistic variant',
     variant_type: vt,
     sub_variant: (variants[i] ?? name) + (i === 2 ? 'a' : 'o'),
-    sub_variant_region: d.ethnicity_tribe ?? d.region_origin ?? 'Regional',
+    sub_variant_region: tribe,
   })) as [TreeBranch, TreeBranch, TreeBranch];
 
   return {
     name,
     root_label: d.linguistic_root,
     root_meaning: (d.primary_meaning ?? '').split(' ').slice(0, 4).join(' '),
-    primary_epoch: d.etymology?.context ?? d.etymology?.era ?? 'Historical',
-    primary_context:
-      d.etymology?.historical_context ?? d.contextual_meaning ?? '',
+    primary_epoch: d.etymology?.context ?? d.etymology?.era ?? 'Historical period',
+    primary_context: d.etymology?.historical_context ?? d.contextual_meaning ?? '',
     region: d.region_origin ?? 'Unknown region',
     tribe: d.ethnicity_tribe ?? 'Unknown culture',
     branches,
-    narrative: `${name} carries the essence of ${d.ethnicity_tribe ?? 'its'} heritage. ${d.contextual_meaning ?? d.etymology?.historical_context ?? ''}`,
+    narrative: `${name} carries the essence of ${tribe} heritage. ${d.contextual_meaning ?? d.etymology?.historical_context ?? ''}`,
     source: 'db',
   };
+}
+
+// ── Graceful fallback — returned when AI fails, never returns an error to UI ──
+function buildFallbackTree(name: string, dbRow: any | null): TreeData {
+  const cap = name.charAt(0).toUpperCase() + name.slice(1);
+  const base = dbRow?.linguistic_root ?? name;
+  const ctx = dbRow?.contextual_meaning ?? dbRow?.etymology?.historical_context ??
+    `${cap} is a name with deep historical and cultural significance, passed down through generations.`;
+
+  return {
+    name: cap,
+    root_label: base,
+    root_meaning: (dbRow?.primary_meaning ?? 'Ancient root').split(' ').slice(0, 4).join(' '),
+    primary_epoch: dbRow?.etymology?.era ?? 'Historical',
+    primary_context: ctx,
+    region: dbRow?.region_origin ?? 'Unknown region',
+    tribe: dbRow?.ethnicity_tribe ?? 'Unknown culture',
+    branches: [
+      { name: cap + 'a',   meaning: 'Feminine variant',   variant_type: 'Feminine',   sub_variant: cap + 'ah', sub_variant_region: 'Regional'  },
+      { name: cap + 'i',   meaning: 'Extended form',      variant_type: 'Extended',   sub_variant: cap + 'io', sub_variant_region: 'Modern'    },
+      { name: cap.slice(0, -1) || cap, meaning: 'Short form', variant_type: 'Short Form', sub_variant: cap + 'el', sub_variant_region: 'Diaspora' },
+    ],
+    narrative: `${cap} carries an enduring legacy across time and culture. ${ctx}`,
+    source: 'fallback',
+  };
+}
+
+// ── Lazy admin client ─────────────────────────────────────────────────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _admin: any = null;
+function getAdmin(): any {
+  if (!_admin && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    _admin = createAdminClient<any, any>(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+  }
+  return _admin;
 }
 
 // ── POST /api/tree ────────────────────────────────────────────────────────────
@@ -115,7 +133,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Content-Type must be application/json.' }, { status: 415 });
     }
 
-    // 2. Rate limit by IP (public endpoint — no auth required for tree reads)
+    // 2. Rate limit by IP (public endpoint — read-only tree data)
     const headersList = await headers();
     const ip =
       headersList.get('x-forwarded-for')?.split(',')[0].trim() ??
@@ -126,112 +144,127 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Too many requests. Please try again shortly.' }, { status: 429 });
     }
 
-    // 3. Parse body
+    // 3. Parse & validate body
     const body = await request.json();
     const name = (body?.name ?? '').trim();
-    if (!name) {
-      return NextResponse.json({ error: 'Name is required.' }, { status: 400 });
-    }
-    if (name.length > 100) {
-      return NextResponse.json({ error: 'Name too long.' }, { status: 400 });
-    }
+    if (!name) return NextResponse.json({ error: 'Name is required.' }, { status: 400 });
+    if (name.length > 100) return NextResponse.json({ error: 'Name too long.' }, { status: 400 });
 
-    // 4. Try Supabase first
+    // 4. In-memory cache
+    const cached = getCachedTree(name);
+    if (cached) return NextResponse.json(cached);
+
+    // 5. Supabase lookup (also fetches the row id for precise update later)
     const supabase = await createClient();
     const { data: dbRow } = await supabase
       .from('names')
-      .select('linguistic_root, primary_meaning, contextual_meaning, region_origin, ethnicity_tribe, etymology, vibe_tags')
+      .select('id, linguistic_root, primary_meaning, contextual_meaning, region_origin, ethnicity_tribe, etymology')
       .ilike('name', name)
       .order('created_at', { ascending: false })
       .limit(1)
       .single();
 
-    // 5. If DB has sufficient data — return immediately (no AI cost)
+    // 6. Serve from DB if sufficient (relaxed check — no longer requires 3 variants)
     if (dbRow && isSufficient(dbRow)) {
-      return NextResponse.json(mapDbToTree(name, dbRow));
+      const treeData = mapDbToTree(name, dbRow);
+      treeCache.set(name.toLowerCase(), { data: treeData, ts: Date.now() });
+      return NextResponse.json(treeData);
     }
 
-    // 6. AI Fallback — call Qwen to generate / enrich the tree
+    // 7. AI fallback — if key missing, serve graceful fallback immediately
     if (!process.env.QWEN_API_KEY) {
-      return NextResponse.json({ error: 'AI enrichment unavailable.' }, { status: 503 });
+      console.warn('[Tree] QWEN_API_KEY missing — serving fallback tree.');
+      return NextResponse.json(buildFallbackTree(name, dbRow));
     }
 
-    const qwen = new OpenAI({
-      apiKey: process.env.QWEN_API_KEY!,
-      baseURL: process.env.QWEN_BASE_URL || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
-    });
-
-    // Build a seed prompt using what we already know from DB (if anything)
+    // 8. Build seed context from existing DB data
     const seedContext = dbRow
-      ? `Seed data already known about this name:
-- Primary meaning: ${dbRow.primary_meaning ?? 'unknown'}
-- Linguistic root: ${dbRow.linguistic_root ?? 'unknown'}
-- Region: ${dbRow.region_origin ?? 'unknown'}
-- Cultural group: ${dbRow.ethnicity_tribe ?? 'unknown'}
-- Context: ${dbRow.contextual_meaning ?? 'unknown'}
+      ? `Known data: meaning="${dbRow.primary_meaning ?? '?'}", root="${dbRow.linguistic_root ?? '?'}", region="${dbRow.region_origin ?? '?'}", culture="${dbRow.ethnicity_tribe ?? '?'}", context="${dbRow.contextual_meaning ?? '?'}". Enrich with historical branches.`
+      : `No prior data. Research "${name}" from scratch using onomastic knowledge.`;
 
-Use this as the factual foundation. Enrich and expand with historical branches.`
-      : `No prior data is available. Research this name from scratch using your onomastic knowledge.`;
-
-    const userPrompt = `Generate the complete etymology tree JSON for the name "${name}".
-
-${seedContext}`;
-
+    // 9. Call Qwen with retry + 12s timeout
+    const qwen = getQwenClient();
     let rawText = '';
+
     for (let attempt = 1; attempt <= 3; attempt++) {
-      const completion = await qwen.chat.completions.create({
-        model: 'qwen-max',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userPrompt },
-        ],
-        temperature: 0.7,
-        top_p: 0.9,
-      });
-      rawText = completion.choices[0]?.message?.content ?? '';
-      if (rawText) break;
-      if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 500));
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12_000);
+
+      try {
+        const completion = await qwen.chat.completions.create(
+          {
+            model: 'qwen-max',
+            messages: [
+              { role: 'system', content: SYSTEM_PROMPT },
+              { role: 'user', content: `Generate etymology tree JSON for "${name}". ${seedContext}` },
+            ],
+            temperature: 0.3,
+            top_p: 0.85,
+          },
+          { signal: controller.signal }
+        );
+        clearTimeout(timeoutId);
+        rawText = completion.choices[0]?.message?.content ?? '';
+        if (rawText) break;
+      } catch (err: any) {
+        clearTimeout(timeoutId);
+        const isAbort = err.name === 'AbortError' || err.code === 'ERR_CANCELED';
+        console.warn(`[Tree] Attempt ${attempt}/3 failed: ${isAbort ? 'timeout (12s)' : err.message}`);
+        if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 400));
+      }
     }
 
+    // 10. If AI failed after all retries — serve graceful fallback (never 502)
     if (!rawText) {
-      return NextResponse.json({ error: 'AI enrichment failed. Please try again.' }, { status: 502 });
+      console.error(`[Tree] AI failed for "${name}" after 3 attempts — serving fallback.`);
+      const fallback = buildFallbackTree(name, dbRow);
+      treeCache.set(name.toLowerCase(), { data: fallback, ts: Date.now() });
+      return NextResponse.json(fallback);
     }
 
-    const cleaned = rawText.replace(/```json\n?|```/g, '').trim();
-    const aiData = JSON.parse(cleaned) as Omit<TreeData, 'name' | 'source'>;
+    // 11. Parse AI response
+    let aiData: Omit<TreeData, 'name' | 'source'>;
+    try {
+      aiData = JSON.parse(rawText.replace(/```json\n?|```/g, '').trim());
+    } catch {
+      console.error('[Tree] JSON parse failed — serving fallback.');
+      return NextResponse.json(buildFallbackTree(name, dbRow));
+    }
 
     const treeData: TreeData = { name, ...aiData, source: 'ai' };
+    treeCache.set(name.toLowerCase(), { data: treeData, ts: Date.now() });
 
-    // 7. Save AI-enriched etymology back to DB (only if the row already exists)
-    if (dbRow && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      const admin = createAdminClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
-      );
-      // Update etymology column with the richer AI data so future requests hit DB
-      admin
-        .from('names')
-        .update({
-          etymology: {
-            era: aiData.primary_epoch,
-            historical_context: aiData.primary_context,
-            related_variants: aiData.branches.map(b => b.name),
-          },
-          linguistic_root: aiData.root_label,
-          region_origin: aiData.region,
-          ethnicity_tribe: aiData.tribe,
-        })
-        .ilike('name', name)
-        .then(({ error }) => {
-          if (error) console.warn('[Tree] DB update failed:', error.message);
-        });
+    // 12. Write enriched data back to DB using row id (not ilike — precise update)
+    if (dbRow?.id) {
+      const admin = getAdmin();
+      if (admin) {
+        admin
+          .from('names')
+          .update({
+            etymology: {
+              era: aiData.primary_epoch,
+              historical_context: aiData.primary_context,
+              related_variants: aiData.branches.map(b => b.name),
+            },
+            linguistic_root: aiData.root_label,
+            region_origin: aiData.region,
+            ethnicity_tribe: aiData.tribe,
+          })
+          .eq('id', dbRow.id) // Precise single-row update via PK, not ilike
+          .then(({ error }) => {
+            if (error) console.warn('[Tree] DB enrichment write failed:', error.message);
+            else console.log(`[Tree] Enriched DB row id=${dbRow.id} for "${name}"`);
+          });
+      }
     }
 
     return NextResponse.json(treeData);
+
   } catch (error: any) {
-    console.error('[/api/tree] Error:', error);
+    // Final safety net — log internally, never expose stack to client
+    console.error('[Tree] Unhandled error:', error?.message ?? error);
     return NextResponse.json(
-      { error: error?.message ?? 'Etymology tree generation failed.' },
+      { error: 'Etymology tree generation failed. Please try again.' },
       { status: 500 }
     );
   }
