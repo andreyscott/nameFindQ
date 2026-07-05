@@ -52,7 +52,6 @@ export function Navbar() {
     { name: "Discovery", path: "/" },
     { name: "Tree", path: "/tree" },
     { name: "Saved", path: "/saved" },
-    { name: "History", path: "/history" },
   ];
 
   // Generate initials from email

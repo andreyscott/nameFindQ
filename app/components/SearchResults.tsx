@@ -143,7 +143,7 @@ export function SearchResults({ results, query, isLoading }: SearchResultsProps)
 
               {/* Vibe tags */}
               {item.vibe_tags && item.vibe_tags.length > 0 && (
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 mb-4">
                   {item.vibe_tags.slice(0, 5).map((tag) => (
                     <span
                       key={tag}
@@ -154,6 +154,11 @@ export function SearchResults({ results, query, isLoading }: SearchResultsProps)
                   ))}
                 </div>
               )}
+
+              {/* View Details affordance */}
+              <span className="font-mono text-[9px] tracking-[0.2em] uppercase text-black/30 group-hover:text-[#C1694F] transition-colors">
+                View Details →
+              </span>
             </motion.article>
           </Link>
         ))}

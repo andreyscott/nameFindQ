@@ -58,16 +58,7 @@ export function BottomNav() {
         </svg>
       )
     },
-    {
-      label: "HISTORY",
-      href: "/history",
-      icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10" />
-          <polyline points="12 6 12 12 16 14" />
-        </svg>
-      )
-    },
+
     {
       label: user ? "ACCOUNT" : "LOGIN",
       href: user ? "/profile" : "/login",

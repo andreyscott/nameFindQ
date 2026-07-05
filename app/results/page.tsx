@@ -54,7 +54,7 @@ function ResultsContent() {
   const query = searchParams.get("q") || "";
   const type = searchParams.get("type") || "vibe";
 
-  const { addHistory, toggleSave, isSaved } = usePersistence();
+  const { toggleSave, isSaved } = usePersistence();
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -86,11 +86,6 @@ function ResultsContent() {
 
         if (!cancelled) {
           setData(json);
-          // ✅ SAFE HISTORY LOG — only runs if this effect wasn't cleaned up.
-          // In StrictMode the cleanup fires before the second run, so the first
-          // call's addHistory is skipped (cancelled=true) and only the second
-          // invocation writes the log — exactly one entry per search.
-          addHistory(query);
         }
       } catch (err: any) {
         if (!cancelled) setError(err.message);
