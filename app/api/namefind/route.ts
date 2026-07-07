@@ -177,15 +177,18 @@ export async function POST(request: Request) {
       return NextResponse.json(dbResult);
     }
 
-    // 7. ── Call Qwen with retry + 12s timeout ─────────────────────────────
+    // 7. ── Call Qwen with retry + 25s timeout ─────────────────────────────
+    // qwen-max takes 18-25s on cold starts; 12s was too aggressive.
+    // Max 2 retries × 25s = 50s — safely under Vercel's 60s function limit.
     const qwen = getQwenClient();
     const userPrompt = buildUserPrompt(currentQuery, currentType);
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 2;
     let rawText = '';
+    let lastError = '';
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12_000);
+      const timeoutId = setTimeout(() => controller.abort(), 25_000);
 
       try {
         const completion = await qwen.chat.completions.create(
@@ -195,25 +198,26 @@ export async function POST(request: Request) {
               { role: 'system', content: SYSTEM_PROMPT },
               { role: 'user', content: userPrompt },
             ],
-            temperature: 0.3,   // Lower = more reliable JSON structure
+            temperature: 0.3,
             top_p: 0.85,
+            max_tokens: 1500, // Cap response to speed up generation
           },
           { signal: controller.signal }
         );
         clearTimeout(timeoutId);
         rawText = completion.choices[0]?.message?.content ?? '';
         if (rawText) break;
+        lastError = 'Empty response from model';
       } catch (err: any) {
         clearTimeout(timeoutId);
         const isAbort = err.name === 'AbortError' || err.code === 'ERR_CANCELED';
-        console.warn(`[Namefind] Attempt ${attempt}/${MAX_RETRIES} failed: ${isAbort ? 'timeout (12s)' : err.message}`);
-        if (attempt === MAX_RETRIES) throw new Error('AI failed after 3 attempts. Please try again.');
+        lastError = isAbort ? 'Request timed out after 25s' : (err.message ?? 'Unknown error');
+        console.warn(`[Namefind] Attempt ${attempt}/${MAX_RETRIES} failed — ${lastError}`);
+        if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, 1_000));
       }
-
-      if (!rawText && attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, attempt * 400));
     }
 
-    if (!rawText) throw new Error('Qwen returned empty output after 3 attempts.');
+    if (!rawText) throw new Error(`Qwen unavailable after ${MAX_RETRIES} attempts: ${lastError}`);
 
     // 8. Parse
     const cleanedText = rawText.replace(/```json\n?|```/g, '').trim();
