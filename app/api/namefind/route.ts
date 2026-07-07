@@ -219,7 +219,6 @@ export async function POST(request: Request) {
             ],
             temperature: 0.3,
             top_p: 0.85,
-            max_tokens: 1500, // Cap response to speed up generation
           },
           { signal: controller.signal }
         );
