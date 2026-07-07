@@ -25,14 +25,33 @@ const NameResultSchema = z.object({
 
 type NameResponse = z.infer<typeof NameResultSchema>;
 
-// ── Condensed system prompt — ~47% fewer tokens vs previous version ───────────
-// Compact schema notation eliminates prose while enforcing the same output shape.
-const SYSTEM_PROMPT = `Onomastic AI. Output ONLY valid JSON — no markdown, no fences, no extra text.
+// ── System prompt ────────────────────────────────────────────────────────────
+const SYSTEM_PROMPT = `You are an expert onomastic historian and linguistic analyst specializing in global name origins.
 
-Schema (all fields required in results):
-{"query_tags":["TAG1","TAG2","TAG3"],"results":[{"name":"","primary_meaning":"literal translation","contextual_meaning":"cultural usage context","region_origin":"e.g. Nigeria (South West)","ethnicity_tribe":"e.g. Yoruba","linguistic_root":"e.g. Oluwa(God)+Se(did)+Un(it)","gender":"Masculine|Feminine|Neutral","pronunciation":"IPA or readable phonetic","etymology_node":{"era":"historical period","historical_context":"1-2 sentences"}}]}
+Your ONLY output must be a single valid JSON object — no markdown, no code fences, no explanation.
 
-Return 5 results for vibe queries, 3 for blend queries.`;
+Required JSON structure:
+{
+  "query_tags": ["UPPERCASE_TAG_1", "UPPERCASE_TAG_2", "UPPERCASE_TAG_3"],
+  "results": [
+    {
+      "name": "The name",
+      "primary_meaning": "The literal translation or core meaning",
+      "contextual_meaning": "Cultural context — when or why this name is given",
+      "region_origin": "Geographic origin e.g. Nigeria (South West)",
+      "ethnicity_tribe": "Cultural group e.g. Yoruba, Hebrew, Latin",
+      "linguistic_root": "Root morphemes e.g. El (God) + Daniel (Judge)",
+      "gender": "Masculine, Feminine, or Neutral",
+      "pronunciation": "Phonetic pronunciation",
+      "etymology_node": {
+        "era": "Historical period e.g. Biblical Era, Pre-colonial",
+        "historical_context": "1-2 sentences on historical usage"
+      }
+    }
+  ]
+}
+
+Return 5 name results for vibe or semantic queries, and 3 for blend queries.`;
 
 // ── In-memory result cache (1 hour TTL) ──────────────────────────────────────
 const cache = new Map<string, { data: NameResponse; ts: number }>();

@@ -27,13 +27,36 @@ export interface TreeData {
   source: 'db' | 'ai' | 'fallback';
 }
 
-// ── Condensed system prompt — ~42% fewer tokens vs previous version ───────────
-const SYSTEM_PROMPT = `Onomastic historian. Output ONLY valid JSON, no markdown.
+// ── System prompt ─────────────────────────────────────────────────────────────
+const SYSTEM_PROMPT = `You are a professional onomastic historian and etymologist.
+Given a name, return ONLY a single valid JSON object — no markdown, no code fences, no text outside the JSON.
 
-Schema:
-{"root_label":"proto-root with morpheme breakdown e.g. Ada(Daughter)+Eze(King)","root_meaning":"≤4 words","primary_epoch":"period+culture e.g. Pre-colonial Igbo","primary_context":"1-2 sentences on cultural origin","region":"e.g. Nigeria (South East)","tribe":"e.g. Igbo","branches":[{"name":"variant","meaning":"3-5 words","variant_type":"Direct","sub_variant":"derived name","sub_variant_region":"regional label"},{"name":"","meaning":"","variant_type":"Extended","sub_variant":"","sub_variant_region":""},{"name":"","meaning":"","variant_type":"Feminine","sub_variant":"","sub_variant_region":""}],"narrative":"2-3 scholarly sentences on etymological journey."}
+Required JSON structure (all fields mandatory, no empty strings):
+{
+  "root_label": "Oldest proto-root with morpheme breakdown e.g. 'El (God) + Dan (Judge)' or 'Ada (Daughter) + Eze (King)'",
+  "root_meaning": "Core semantic meaning in 4 words or fewer",
+  "primary_epoch": "Historical period and culture e.g. 'Biblical Era, Ancient Hebrew' or 'Pre-colonial Igbo'",
+  "primary_context": "1-2 sentences explaining the cultural origin and usage context of this name",
+  "region": "Specific geographic region e.g. 'Ancient Israel', 'Nigeria (South East)'",
+  "tribe": "Specific ethnic or cultural group e.g. 'Hebrew', 'Igbo', 'Yoruba', 'Latin'",
+  "branches": [
+    {
+      "name": "A close linguistic variant or related name",
+      "meaning": "Its meaning in 3-5 words",
+      "variant_type": "Direct",
+      "sub_variant": "A further derived name from this branch",
+      "sub_variant_region": "Regional or cultural label e.g. 'Romance', 'Modern English'"
+    },
+    { "name": "Second variant", "meaning": "meaning", "variant_type": "Extended", "sub_variant": "derived", "sub_variant_region": "region" },
+    { "name": "Third variant", "meaning": "meaning", "variant_type": "Feminine", "sub_variant": "derived", "sub_variant_region": "region" }
+  ],
+  "narrative": "2-3 elegant scholarly sentences tracing this name's etymological journey across time and culture."
+}
 
-RULES: branches = exactly 3 objects. variant_type ∈ {Direct,Extended,Feminine,Short Form,Modern}. All fields non-empty.`;
+CRITICAL RULES:
+- branches must contain exactly 3 objects
+- variant_type must be one of: Direct, Extended, Feminine, Short Form, Modern
+- All string values must be non-empty`;
 
 // ── In-memory result cache (1 hour TTL) ──────────────────────────────────────
 const treeCache = new Map<string, { data: TreeData; ts: number }>();
