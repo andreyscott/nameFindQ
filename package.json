@@ -7,6 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit.test.ts",
+    "test:logic": "vitest run tests/logic.test.ts",
+    "test:watch": "vitest",
     "db:seed": "dotenv -e .env.local ts-node scripts/seed.ts",
     "db:deploy-fn": "dotenv -e .env.local ts-node scripts/run-match-function.ts",
     "db:embed": "dotenv -e .env.local ts-node scripts/generate-embeddings.ts",
@@ -29,11 +33,13 @@
     "@types/node": "^20.19.41",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/ui": "^4.1.10",
     "dotenv-cli": "^11.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   }
 }
