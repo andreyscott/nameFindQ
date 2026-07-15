@@ -7,7 +7,7 @@ export default defineConfig({
     // Test file patterns
     include: ['tests/**/*.test.ts'],
     // Verbose output so each test name is visible in the report
-    reporter: ['verbose'],
+    reporters: ['verbose'],
     // Coverage (optional — run with --coverage flag)
     coverage: {
       provider: 'v8',
