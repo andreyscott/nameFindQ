@@ -205,34 +205,49 @@ export async function POST(request: Request) {
       ? `Known data: meaning="${dbRow.primary_meaning ?? '?'}", root="${dbRow.linguistic_root ?? '?'}", region="${dbRow.region_origin ?? '?'}", culture="${dbRow.ethnicity_tribe ?? '?'}", context="${dbRow.contextual_meaning ?? '?'}". Enrich with historical branches.`
       : `No prior data. Research "${name}" from scratch using onomastic knowledge.`;
 
-    // 9. Call Qwen — no signal passed (causes empty-output errors on DashScope endpoint)
-    const qwen = getQwenClient();
-    const MODELS = ['qwen-max', 'qwen-plus'] as const;
+    // 9. Direct fetch to DashScope REST API (bypasses OpenAI SDK compatibility issues)
+    const MODELS = ['qwen-max', 'qwen-plus'];
+    const apiKey = process.env.QWEN_API_KEY!;
+    const baseURL = process.env.QWEN_BASE_URL ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
     let rawText = '';
-
-    const timeout = (ms: number) =>
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Request timed out after ${ms / 1000}s`)), ms)
-      );
 
     outer: for (const model of MODELS) {
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          const completion = await Promise.race([
-            qwen.chat.completions.create({
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 25_000);
+
+          const res = await fetch(`${baseURL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
               model,
               messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
-                { role: 'user', content: `Generate etymology tree JSON for "${name}". ${seedContext}` },
+                { role: 'user',   content: `Generate etymology tree JSON for "${name}". ${seedContext}` },
               ],
               temperature: 0.7,
             }),
-            timeout(25_000),
-          ]);
-          rawText = completion.choices[0]?.message?.content ?? '';
+            signal: controller.signal,
+          });
+          clearTimeout(tid);
+
+          const json = await res.json();
+
+          if (!res.ok) {
+            console.warn(`[Tree] ${model} attempt ${attempt}/2 — API error: ${json?.error?.message ?? res.status}`);
+            if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
+            continue;
+          }
+
+          rawText = json?.choices?.[0]?.message?.content ?? '';
           if (rawText) break outer;
         } catch (err: any) {
-          console.warn(`[Tree] ${model} attempt ${attempt}/2 failed — ${err.message}`);
+          const msg = err.name === 'AbortError' ? 'timeout (25s)' : err.message;
+          console.warn(`[Tree] ${model} attempt ${attempt}/2 failed — ${msg}`);
           if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
         }
       }

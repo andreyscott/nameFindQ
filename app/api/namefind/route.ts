@@ -196,41 +196,54 @@ export async function POST(request: Request) {
       return NextResponse.json(dbResult);
     }
 
-    // 7. ── Call Qwen with model fallback ───────────────────────────────────────
-    // Note: signal is intentionally NOT passed to the Qwen API call.
-    // Qwen's DashScope-compatible endpoint rejects requests where the OpenAI
-    // SDK has an active AbortController attached, returning empty output errors.
-    // We use Promise.race for timeout instead — clean and SDK-agnostic.
-    const qwen = getQwenClient();
+    // 7. ── Direct fetch to DashScope REST API ────────────────────────────
+    // Bypasses the OpenAI SDK entirely — SDK compatibility issues with Qwen's
+    // DashScope endpoint were causing persistent empty-output errors.
     const userPrompt = buildUserPrompt(currentQuery, currentType);
-    const MODELS = ['qwen-max', 'qwen-plus'] as const;
+    const MODELS = ['qwen-max', 'qwen-plus'];
+    const apiKey = process.env.QWEN_API_KEY!;
+    const baseURL = process.env.QWEN_BASE_URL ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
     let rawText = '';
     let lastError = '';
-
-    const timeout = (ms: number) =>
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Request timed out after ${ms / 1000}s`)), ms)
-      );
 
     outer: for (const model of MODELS) {
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          const completion = await Promise.race([
-            qwen.chat.completions.create({
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 25_000);
+
+          const res = await fetch(`${baseURL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
               model,
               messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
-                { role: 'user', content: userPrompt },
+                { role: 'user',   content: userPrompt },
               ],
               temperature: 0.7,
             }),
-            timeout(25_000),
-          ]);
-          rawText = completion.choices[0]?.message?.content ?? '';
+            signal: controller.signal,
+          });
+          clearTimeout(tid);
+
+          const json = await res.json();
+
+          if (!res.ok) {
+            lastError = json?.error?.message ?? json?.message ?? `HTTP ${res.status}`;
+            console.warn(`[Namefind] ${model} attempt ${attempt}/2 — API error: ${lastError}`);
+            if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
+            continue;
+          }
+
+          rawText = json?.choices?.[0]?.message?.content ?? '';
           if (rawText) break outer;
           lastError = 'Empty response from model';
         } catch (err: any) {
-          lastError = err.message ?? 'Unknown error';
+          lastError = err.name === 'AbortError' ? 'Request timed out (25s)' : (err.message ?? 'Unknown error');
           console.warn(`[Namefind] ${model} attempt ${attempt}/2 failed — ${lastError}`);
           if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
         }
@@ -238,8 +251,7 @@ export async function POST(request: Request) {
       if (!rawText) console.warn(`[Namefind] ${model} exhausted — trying next model.`);
     }
 
-    if (!rawText) throw new Error(`Qwen unavailable (qwen-max + qwen-plus both failed): ${lastError}`);
-
+    if (!rawText) throw new Error(`AI unavailable. Last error: ${lastError}`);
 
     // 8. Parse
     const cleanedText = rawText.replace(/```json\n?|```/g, '').trim();
