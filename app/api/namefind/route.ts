@@ -200,7 +200,7 @@ export async function POST(request: Request) {
     // Bypasses the OpenAI SDK entirely — SDK compatibility issues with Qwen's
     // DashScope endpoint were causing persistent empty-output errors.
     const userPrompt = buildUserPrompt(currentQuery, currentType);
-    const MODELS = ['qwen-max', 'qwen-plus'];
+    const MODELS = ['qwen-max', 'qwen-plus', 'qwen-turbo'];
     const apiKey = process.env.QWEN_API_KEY!;
     const baseURL = process.env.QWEN_BASE_URL ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
     let rawText = '';

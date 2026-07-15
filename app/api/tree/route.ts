@@ -206,7 +206,7 @@ export async function POST(request: Request) {
       : `No prior data. Research "${name}" from scratch using onomastic knowledge.`;
 
     // 9. Direct fetch to DashScope REST API (bypasses OpenAI SDK compatibility issues)
-    const MODELS = ['qwen-max', 'qwen-plus'];
+    const MODELS = ['qwen-max', 'qwen-plus', 'qwen-turbo'];
     const apiKey = process.env.QWEN_API_KEY!;
     const baseURL = process.env.QWEN_BASE_URL ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
     let rawText = '';
