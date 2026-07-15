@@ -205,37 +205,39 @@ export async function POST(request: Request) {
       ? `Known data: meaning="${dbRow.primary_meaning ?? '?'}", root="${dbRow.linguistic_root ?? '?'}", region="${dbRow.region_origin ?? '?'}", culture="${dbRow.ethnicity_tribe ?? '?'}", context="${dbRow.contextual_meaning ?? '?'}". Enrich with historical branches.`
       : `No prior data. Research "${name}" from scratch using onomastic knowledge.`;
 
-    // 9. Call Qwen with retry + 25s timeout
-    // qwen-max takes 18-25s on cold starts — 12s was too aggressive.
+    // 9. Call Qwen — temperature 0.7, no top_p, qwen-plus fallback if qwen-max fails
     const qwen = getQwenClient();
+    const MODELS = ['qwen-max', 'qwen-plus'] as const;
     let rawText = '';
 
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 25_000);
+    outer: for (const model of MODELS) {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 25_000);
 
-      try {
-        const completion = await qwen.chat.completions.create(
-          {
-            model: 'qwen-max',
-            messages: [
-              { role: 'system', content: SYSTEM_PROMPT },
-              { role: 'user', content: `Generate etymology tree JSON for "${name}". ${seedContext}` },
-            ],
-            temperature: 0.3,
-            top_p: 0.85,
-          },
-          { signal: controller.signal }
-        );
-        clearTimeout(timeoutId);
-        rawText = completion.choices[0]?.message?.content ?? '';
-        if (rawText) break;
-      } catch (err: any) {
-        clearTimeout(timeoutId);
-        const isAbort = err.name === 'AbortError' || err.code === 'ERR_CANCELED';
-        console.warn(`[Tree] Attempt ${attempt}/2 failed — ${isAbort ? 'timeout (25s)' : err.message}`);
-        if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
+        try {
+          const completion = await qwen.chat.completions.create(
+            {
+              model,
+              messages: [
+                { role: 'system', content: SYSTEM_PROMPT },
+                { role: 'user', content: `Generate etymology tree JSON for "${name}". ${seedContext}` },
+              ],
+              temperature: 0.7,
+            },
+            { signal: controller.signal }
+          );
+          clearTimeout(timeoutId);
+          rawText = completion.choices[0]?.message?.content ?? '';
+          if (rawText) break outer;
+        } catch (err: any) {
+          clearTimeout(timeoutId);
+          const isAbort = err.name === 'AbortError' || err.code === 'ERR_CANCELED';
+          console.warn(`[Tree] ${model} attempt ${attempt}/2 failed — ${isAbort ? 'timeout (25s)' : err.message}`);
+          if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
+        }
       }
+      if (!rawText) console.warn(`[Tree] ${model} exhausted — trying next model.`);
     }
 
     // 10. If AI failed after all retries — serve graceful fallback (never 502)

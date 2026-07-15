@@ -197,42 +197,45 @@ export async function POST(request: Request) {
     }
 
     // 7. ── Call Qwen with retry + 25s timeout ─────────────────────────────
-    // qwen-max takes 18-25s on cold starts; 12s was too aggressive.
-    // Max 2 retries × 25s = 50s — safely under Vercel's 60s function limit.
+    // temperature 0.7 is Qwen's recommended range for structured JSON generation.
+    // top_p is omitted — combining it with temperature can cause empty output on Qwen.
+    // Fallback: if qwen-max returns the empty-output error, retry with qwen-plus.
     const qwen = getQwenClient();
     const userPrompt = buildUserPrompt(currentQuery, currentType);
-    const MAX_RETRIES = 2;
+    const MODELS = ['qwen-max', 'qwen-plus'] as const;
     let rawText = '';
     let lastError = '';
 
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 25_000);
+    outer: for (const model of MODELS) {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 25_000);
 
-      try {
-        const completion = await qwen.chat.completions.create(
-          {
-            model: 'qwen-max',
-            messages: [
-              { role: 'system', content: SYSTEM_PROMPT },
-              { role: 'user', content: userPrompt },
-            ],
-            temperature: 0.3,
-            top_p: 0.85,
-          },
-          { signal: controller.signal }
-        );
-        clearTimeout(timeoutId);
-        rawText = completion.choices[0]?.message?.content ?? '';
-        if (rawText) break;
-        lastError = 'Empty response from model';
-      } catch (err: any) {
-        clearTimeout(timeoutId);
-        const isAbort = err.name === 'AbortError' || err.code === 'ERR_CANCELED';
-        lastError = isAbort ? 'Request timed out after 25s' : (err.message ?? 'Unknown error');
-        console.warn(`[Namefind] Attempt ${attempt}/${MAX_RETRIES} failed — ${lastError}`);
-        if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, 1_000));
+        try {
+          const completion = await qwen.chat.completions.create(
+            {
+              model,
+              messages: [
+                { role: 'system', content: SYSTEM_PROMPT },
+                { role: 'user', content: userPrompt },
+              ],
+              temperature: 0.7,
+            },
+            { signal: controller.signal }
+          );
+          clearTimeout(timeoutId);
+          rawText = completion.choices[0]?.message?.content ?? '';
+          if (rawText) break outer; // success — exit both loops
+          lastError = 'Empty response from model';
+        } catch (err: any) {
+          clearTimeout(timeoutId);
+          const isAbort = err.name === 'AbortError' || err.code === 'ERR_CANCELED';
+          lastError = isAbort ? 'Request timed out after 25s' : (err.message ?? 'Unknown error');
+          console.warn(`[Namefind] ${model} attempt ${attempt}/2 failed — ${lastError}`);
+          if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
+        }
       }
+      if (!rawText) console.warn(`[Namefind] ${model} exhausted — trying next model.`);
     }
 
     if (!rawText) throw new Error(`Qwen unavailable after ${MAX_RETRIES} attempts: ${lastError}`);
