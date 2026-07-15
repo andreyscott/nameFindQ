@@ -238,7 +238,8 @@ export async function POST(request: Request) {
       if (!rawText) console.warn(`[Namefind] ${model} exhausted — trying next model.`);
     }
 
-    if (!rawText) throw new Error(`Qwen unavailable after ${MAX_RETRIES} attempts: ${lastError}`);
+    if (!rawText) throw new Error(`Qwen unavailable (qwen-max + qwen-plus both failed): ${lastError}`);
+
 
     // 8. Parse
     const cleanedText = rawText.replace(/```json\n?|```/g, '').trim();
