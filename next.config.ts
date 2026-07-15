@@ -33,6 +33,8 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Produce a minimal self-contained server in .next/standalone for Docker
+  output: 'standalone',
   async headers() {
     return [
       {

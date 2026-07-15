@@ -1,0 +1,32 @@
+# ── Build context exclusions ───────────────────────────────────────────────────
+# Prevents large/irrelevant directories from being sent to the Docker daemon.
+# Critical: node_modules alone is ~500MB and is rebuilt inside the container.
+
+node_modules
+.next
+.git
+.gitignore
+
+# Test files — not needed at runtime
+tests
+coverage
+
+# Scripts and tooling — not part of the production app
+scripts
+
+# Environment files — secrets must NEVER be baked into the image
+.env*
+*.local
+
+# Documentation
+*.md
+walkthrough.md
+
+# Editor and OS artifacts
+.DS_Store
+*.pem
+.vercel
+
+# TypeScript build info
+*.tsbuildinfo
+next-env.d.ts
