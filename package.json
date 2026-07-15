@@ -11,6 +11,7 @@
     "test:unit": "vitest run tests/unit.test.ts",
     "test:logic": "vitest run tests/logic.test.ts",
     "test:watch": "vitest",
+    "docker:build": "bash scripts/build-push.sh",
     "db:seed": "dotenv -e .env.local ts-node scripts/seed.ts",
     "db:deploy-fn": "dotenv -e .env.local ts-node scripts/run-match-function.ts",
     "db:embed": "dotenv -e .env.local ts-node scripts/generate-embeddings.ts",
