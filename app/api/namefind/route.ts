@@ -196,41 +196,41 @@ export async function POST(request: Request) {
       return NextResponse.json(dbResult);
     }
 
-    // 7. ── Call Qwen with retry + 25s timeout ─────────────────────────────
-    // temperature 0.7 is Qwen's recommended range for structured JSON generation.
-    // top_p is omitted — combining it with temperature can cause empty output on Qwen.
-    // Fallback: if qwen-max returns the empty-output error, retry with qwen-plus.
+    // 7. ── Call Qwen with model fallback ───────────────────────────────────────
+    // Note: signal is intentionally NOT passed to the Qwen API call.
+    // Qwen's DashScope-compatible endpoint rejects requests where the OpenAI
+    // SDK has an active AbortController attached, returning empty output errors.
+    // We use Promise.race for timeout instead — clean and SDK-agnostic.
     const qwen = getQwenClient();
     const userPrompt = buildUserPrompt(currentQuery, currentType);
     const MODELS = ['qwen-max', 'qwen-plus'] as const;
     let rawText = '';
     let lastError = '';
 
+    const timeout = (ms: number) =>
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Request timed out after ${ms / 1000}s`)), ms)
+      );
+
     outer: for (const model of MODELS) {
       for (let attempt = 1; attempt <= 2; attempt++) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 25_000);
-
         try {
-          const completion = await qwen.chat.completions.create(
-            {
+          const completion = await Promise.race([
+            qwen.chat.completions.create({
               model,
               messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
                 { role: 'user', content: userPrompt },
               ],
               temperature: 0.7,
-            },
-            { signal: controller.signal }
-          );
-          clearTimeout(timeoutId);
+            }),
+            timeout(25_000),
+          ]);
           rawText = completion.choices[0]?.message?.content ?? '';
-          if (rawText) break outer; // success — exit both loops
+          if (rawText) break outer;
           lastError = 'Empty response from model';
         } catch (err: any) {
-          clearTimeout(timeoutId);
-          const isAbort = err.name === 'AbortError' || err.code === 'ERR_CANCELED';
-          lastError = isAbort ? 'Request timed out after 25s' : (err.message ?? 'Unknown error');
+          lastError = err.message ?? 'Unknown error';
           console.warn(`[Namefind] ${model} attempt ${attempt}/2 failed — ${lastError}`);
           if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
         }

@@ -205,35 +205,34 @@ export async function POST(request: Request) {
       ? `Known data: meaning="${dbRow.primary_meaning ?? '?'}", root="${dbRow.linguistic_root ?? '?'}", region="${dbRow.region_origin ?? '?'}", culture="${dbRow.ethnicity_tribe ?? '?'}", context="${dbRow.contextual_meaning ?? '?'}". Enrich with historical branches.`
       : `No prior data. Research "${name}" from scratch using onomastic knowledge.`;
 
-    // 9. Call Qwen — temperature 0.7, no top_p, qwen-plus fallback if qwen-max fails
+    // 9. Call Qwen — no signal passed (causes empty-output errors on DashScope endpoint)
     const qwen = getQwenClient();
     const MODELS = ['qwen-max', 'qwen-plus'] as const;
     let rawText = '';
 
+    const timeout = (ms: number) =>
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Request timed out after ${ms / 1000}s`)), ms)
+      );
+
     outer: for (const model of MODELS) {
       for (let attempt = 1; attempt <= 2; attempt++) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 25_000);
-
         try {
-          const completion = await qwen.chat.completions.create(
-            {
+          const completion = await Promise.race([
+            qwen.chat.completions.create({
               model,
               messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
                 { role: 'user', content: `Generate etymology tree JSON for "${name}". ${seedContext}` },
               ],
               temperature: 0.7,
-            },
-            { signal: controller.signal }
-          );
-          clearTimeout(timeoutId);
+            }),
+            timeout(25_000),
+          ]);
           rawText = completion.choices[0]?.message?.content ?? '';
           if (rawText) break outer;
         } catch (err: any) {
-          clearTimeout(timeoutId);
-          const isAbort = err.name === 'AbortError' || err.code === 'ERR_CANCELED';
-          console.warn(`[Tree] ${model} attempt ${attempt}/2 failed — ${isAbort ? 'timeout (25s)' : err.message}`);
+          console.warn(`[Tree] ${model} attempt ${attempt}/2 failed — ${err.message}`);
           if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
         }
       }
