@@ -1,36 +1,92 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NameFindQ
 
-## Getting Started
+**NameFindQ** is a semantic name-search app. Instead of matching exact spelling, it uses Qwen embeddings (Alibaba Cloud DashScope) stored in Supabase (`pgvector`) to find names with similar meaning and origin. It has a responsive Next.js, Tailwind CSS and Framer Motion interface. It ships as a standalone Docker container for deployment on Alibaba Cloud Function Compute.
 
-First, run the development server:
+## Features
+
+- **Semantic Name Search**: Uses Qwen embeddings to understand the meaning and origin of names and return accurate semantic matches.
+- **Supabase Integration**: Supabase provides authentication and PostgreSQL storage, with `pgvector` for similarity search over embeddings.
+- **Modern UI**: Built with React, Next.js, Tailwind CSS and Framer Motion.
+- **Cloud-Native Deployment**: Containerized and optimized for Alibaba Cloud Function Compute (FC 3.0).
+
+## Prerequisites
+
+- Node.js v18+ and npm (or yarn/pnpm)
+- A [Supabase](https://supabase.com) project (PostgreSQL with the `pgvector` extension enabled)
+- A Qwen / Alibaba Cloud DashScope API key
+- Docker (only for container builds)
+
+## Setup
+
+1. **Clone the repository and install dependencies**
+
+   ```bash
+   git clone https://github.com/andreyscott/nameFindQ.git
+   cd nameFindQ
+   npm install
+   ```
+
+2. **Enable `pgvector` in Supabase**
+
+   In the Supabase SQL editor, run:
+
+   ```sql
+   create extension if not exists vector;
+   ```
+
+3. **Configure environment variables**
+
+   Create a `.env.local` file in the project root:
+
+   ```env
+   # Supabase (Project Settings -> API)
+   NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+   SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+
+   # Direct Postgres connection string (Project Settings -> Database)
+   DATABASE_URL=postgresql://postgres:<password>@<host>:5432/postgres
+
+   # Qwen / DashScope
+   QWEN_API_KEY=your-dashscope-api-key
+   QWEN_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+   ```
+
+   > Never commit `.env.local`. `SUPABASE_SERVICE_ROLE_KEY` is a server-side secret.
+
+4. **Initialize the database**
+
+   ```bash
+   npm run db:seed        # seed the names data
+   npm run db:deploy-fn   # deploy the vector matching function to Supabase
+   npm run db:embed       # generate and store embeddings for the names
+   ```
+
+5. **Start the development server**
+
+   ```bash
+   npm run dev
+   ```
+
+   Open [http://localhost:3000](http://localhost:3000).
+
+## Scripts
+
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Start the dev server |
+| `npm run build` / `npm start` | Production build / serve |
+| `npm run lint` | Run ESLint |
+| `npm test` | Run all Vitest tests |
+| `npm run test:unit` / `npm run test:logic` | Run specific test suites |
+| `npm run docker:build` | Build and push the Docker image |
+
+## Docker & Deployment
+
+To build the production Docker image (targeted at Alibaba Cloud FC 3.0):
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run docker:build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The app is bundled as a standalone Next.js server that runs as a serverless container. Provide the same environment variables as above in your deployment configuration.
