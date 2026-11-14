@@ -44,7 +44,7 @@ export default function NameDetailsPage({ params }: { params: Promise<{ id: stri
   const displayTitle = nameId.charAt(0).toUpperCase() + nameId.slice(1);
 
   const router = useRouter();
-  const { toggleSave, isSaved } = usePersistence();
+  const { toggleSave, isSaved, saveError } = usePersistence();
   const supabase = useMemo(() => createClient(), []);
 
   const [data, setData] = useState<any>(null);
@@ -52,7 +52,9 @@ export default function NameDetailsPage({ params }: { params: Promise<{ id: stri
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const saved = isSaved(displayTitle);
+  // Save under the dictionary's own spelling once loaded (matching is case-insensitive).
+  const storedName: string = data?.name ?? nameId;
+  const saved = isSaved(storedName);
 
   // ── Fetch name data from Supabase ────────────────────────────────────
   useEffect(() => {
@@ -88,7 +90,7 @@ export default function NameDetailsPage({ params }: { params: Promise<{ id: stri
     setSaving(true);
     try {
       await toggleSave({
-        name: displayTitle,
+        name: storedName,
         short_meaning: data?.primary_meaning || "",
       });
     } finally {
@@ -169,6 +171,12 @@ export default function NameDetailsPage({ params }: { params: Promise<{ id: stri
           {saving ? "Saving…" : saved ? "Saved" : "Save to Collection"}
         </button>
       </div>
+
+      {saveError && (
+        <p role="alert" className="-mt-12 mb-12 text-right font-mono text-[10px] tracking-widest uppercase text-red-500">
+          ⚠ {saveError}
+        </p>
+      )}
 
       {/* ── Hero ───────────────────────────────────────────────────── */}
       <div className="text-center mb-16">

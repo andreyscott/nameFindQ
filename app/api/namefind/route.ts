@@ -191,15 +191,13 @@ export async function POST(request: Request) {
     console.log(`[Namefind] ${model} answered (${data.results.length} results)`);
     cache.set(cacheKey, { data, ts: Date.now() });
 
-    // 8. Write back (fire-and-forget). The RPC never modifies curated seed
-    //    rows — see supabase/migrations/20261114000100_names_source.sql.
+    // 8. Write back before responding, so every returned name already exists
+    //    when the user clicks Save. The RPC never modifies curated seed rows —
+    //    see supabase/migrations/20261114000100_names_source.sql.
     const admin = getAdminClient();
     if (admin) {
-      admin
-        .rpc('upsert_ai_names', { rows: toAiNameRows(data) })
-        .then(({ error }) => {
-          if (error) console.error('[Namefind] upsert_ai_names error:', error.message);
-        });
+      const { error } = await admin.rpc('upsert_ai_names', { rows: toAiNameRows(data) });
+      if (error) console.error('[Namefind] upsert_ai_names error:', error.message);
     } else {
       console.warn('[Namefind] SUPABASE_SERVICE_ROLE_KEY missing — skipping DB write.');
     }

@@ -54,7 +54,7 @@ function ResultsContent() {
   const query = searchParams.get("q") || "";
   const type = searchParams.get("type") || "vibe";
 
-  const { toggleSave, isSaved } = usePersistence();
+  const { toggleSave, isSaved, saveError } = usePersistence();
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -166,6 +166,12 @@ function ResultsContent() {
       transition={{ duration: 0.6 }}
       className="w-full max-w-2xl mx-auto pt-32 pb-32 px-6"
     >
+      {saveError && (
+        <p role="alert" className="mb-8 text-center font-mono text-[10px] tracking-widest uppercase text-red-500">
+          ⚠ {saveError}
+        </p>
+      )}
+
       {/* Query heading */}
       <div className="text-center mb-16">
         <h1 className="text-5xl md:text-7xl font-serif text-black mb-10 capitalize">
