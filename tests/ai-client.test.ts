@@ -41,7 +41,7 @@ describe('chatJSON', () => {
     vi.stubGlobal('fetch', fetchMock);
     const res = await chatJSON({ schema: Simple, system: 's json', user: 'u' });
     expect(res.data).toEqual({ a: 1 });
-    expect(res.model).toBe('qwen-turbo');
+    expect(res.model).toBe('qwen-plus');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -65,7 +65,7 @@ describe('chatJSON', () => {
     vi.stubGlobal('fetch', fetchMock);
     const res = await chatJSON({ schema: Simple, system: 's', user: 'u' });
     expect(res.data).toEqual({ a: 2 });
-    expect(res.model).toBe('qwen-plus');
+    expect(res.model).toBe('qwen-turbo');
   });
 
   it('falls through when a model is not accessible (403)', async () => {
@@ -75,13 +75,21 @@ describe('chatJSON', () => {
     expect(res.data).toEqual({ a: 3 });
   });
 
-  it('throws rate_limited on 429 without trying more models', async () => {
+  it('falls through to the next model when one is rate limited (429)', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(errBody(429)).mockResolvedValueOnce(okBody('{"a":4}'));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await chatJSON({ schema: Simple, system: 's', user: 'u' });
+    expect(res.data).toEqual({ a: 4 });
+    expect(res.model).toBe('qwen-turbo');
+  });
+
+  it('throws rate_limited when every model is rate limited', async () => {
     const fetchMock = vi.fn().mockResolvedValue(errBody(429));
     vi.stubGlobal('fetch', fetchMock);
     await expect(chatJSON({ schema: Simple, system: 's', user: 'u' })).rejects.toMatchObject({
       kind: 'rate_limited',
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('throws invalid_output when every model returns bad data', async () => {

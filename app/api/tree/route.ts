@@ -1,19 +1,15 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/utils/supabase/server';
-import { createClient as createAdminClient } from '@supabase/supabase-js';
-import { rateLimit } from '@/lib/rateLimiter';
-import { getQwenClient } from '@/lib/qwenClient';
 import { headers } from 'next/headers';
+import { z } from 'zod';
+import { createClient } from '@/utils/supabase/server';
+import { getAdminClient } from '@/utils/supabase/admin';
+import { rateLimit } from '@/lib/rateLimiter';
+import { chatJSON } from '@/lib/ai/qwen';
+import { TreeAISchema, type TreeBranch } from '@/lib/ai/schemas';
+
+export type { TreeBranch };
 
 // ── Tree Data Shape ───────────────────────────────────────────────────────────
-export interface TreeBranch {
-  name: string;
-  meaning: string;
-  variant_type: 'Direct' | 'Extended' | 'Feminine' | 'Short Form' | 'Modern';
-  sub_variant: string;
-  sub_variant_region: string;
-}
-
 export interface TreeData {
   name: string;
   root_label: string;
@@ -26,6 +22,25 @@ export interface TreeData {
   narrative: string;
   source: 'db' | 'ai' | 'fallback';
 }
+
+interface DbRow {
+  id: string;
+  linguistic_root: string | null;
+  primary_meaning: string | null;
+  contextual_meaning: string | null;
+  region_origin: string | null;
+  ethnicity_tribe: string | null;
+  etymology: {
+    era?: string;
+    context?: string;
+    historical_context?: string;
+    related_variants?: string[];
+  } | null;
+}
+
+const RequestSchema = z.object({
+  name: z.string().trim().min(1, 'Name is required.').max(100, 'Name too long.'),
+});
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are a professional onomastic historian and etymologist.
@@ -69,12 +84,9 @@ function getCachedTree(name: string): TreeData | null {
   return entry.data;
 }
 
-// ── Relaxed sufficiency check ─────────────────────────────────────────────────
-// Previous version required 3 related_variants (almost never present in DB).
-// Now: root + some context + region is enough to serve a rich tree from DB data.
-function isSufficient(data: any): boolean {
-  const hasRoot =
-    typeof data.linguistic_root === 'string' && data.linguistic_root.length > 8;
+// ── Sufficiency check: root + some context + region is enough ─────────────────
+function isSufficient(data: DbRow): boolean {
+  const hasRoot = typeof data.linguistic_root === 'string' && data.linguistic_root.length > 8;
   const hasContext =
     (data.etymology?.historical_context?.length ?? 0) > 30 ||
     (data.contextual_meaning?.length ?? 0) > 30;
@@ -83,7 +95,7 @@ function isSufficient(data: any): boolean {
 }
 
 // ── Map Supabase row → TreeData ───────────────────────────────────────────────
-function mapDbToTree(name: string, d: any): TreeData {
+function mapDbToTree(name: string, d: DbRow): TreeData {
   const variants: string[] = d.etymology?.related_variants ?? [];
   const types: TreeBranch['variant_type'][] = ['Direct', 'Extended', 'Feminine'];
   const tribe = d.ethnicity_tribe ?? d.region_origin ?? 'Regional';
@@ -98,7 +110,7 @@ function mapDbToTree(name: string, d: any): TreeData {
 
   return {
     name,
-    root_label: d.linguistic_root,
+    root_label: d.linguistic_root ?? name,
     root_meaning: (d.primary_meaning ?? '').split(' ').slice(0, 4).join(' '),
     primary_epoch: d.etymology?.context ?? d.etymology?.era ?? 'Historical period',
     primary_context: d.etymology?.historical_context ?? d.contextual_meaning ?? '',
@@ -110,8 +122,8 @@ function mapDbToTree(name: string, d: any): TreeData {
   };
 }
 
-// ── Graceful fallback — returned when AI fails, never returns an error to UI ──
-function buildFallbackTree(name: string, dbRow: any | null): TreeData {
+// ── Graceful fallback — returned when AI fails ────────────────────────────────
+function buildFallbackTree(name: string, dbRow: DbRow | null): TreeData {
   const cap = name.charAt(0).toUpperCase() + name.slice(1);
   const base = dbRow?.linguistic_root ?? name;
   const ctx = dbRow?.contextual_meaning ?? dbRow?.etymology?.historical_context ??
@@ -135,19 +147,6 @@ function buildFallbackTree(name: string, dbRow: any | null): TreeData {
   };
 }
 
-// ── Lazy admin client ─────────────────────────────────────────────────────────
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _admin: any = null;
-function getAdmin(): any {
-  if (!_admin && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    _admin = createAdminClient<any, any>(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
-  }
-  return _admin;
-}
-
 // ── POST /api/tree ────────────────────────────────────────────────────────────
 export async function POST(request: Request) {
   try {
@@ -156,7 +155,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Content-Type must be application/json.' }, { status: 415 });
     }
 
-    // 2. Rate limit by IP (public endpoint — read-only tree data)
+    // 2. Rate limit by IP (public endpoint)
     const headersList = await headers();
     const ip =
       headersList.get('x-forwarded-for')?.split(',')[0].trim() ??
@@ -168,115 +167,61 @@ export async function POST(request: Request) {
     }
 
     // 3. Parse & validate body
-    const body = await request.json();
-    const name = (body?.name ?? '').trim();
-    if (!name) return NextResponse.json({ error: 'Name is required.' }, { status: 400 });
-    if (name.length > 100) return NextResponse.json({ error: 'Name too long.' }, { status: 400 });
+    const parsed = RequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid request.' }, { status: 400 });
+    }
+    const { name } = parsed.data;
 
     // 4. In-memory cache
     const cached = getCachedTree(name);
     if (cached) return NextResponse.json(cached);
 
-    // 5. Supabase lookup (also fetches the row id for precise update later)
+    // 5. Supabase lookup
     const supabase = await createClient();
-    const { data: dbRow } = await supabase
+    const { data: dbRowData } = await supabase
       .from('names')
       .select('id, linguistic_root, primary_meaning, contextual_meaning, region_origin, ethnicity_tribe, etymology')
       .ilike('name', name)
       .order('created_at', { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
+    const dbRow = (dbRowData as DbRow | null) ?? null;
 
-    // 6. Serve from DB if sufficient (relaxed check — no longer requires 3 variants)
+    // 6. Serve from DB if sufficient
     if (dbRow && isSufficient(dbRow)) {
       const treeData = mapDbToTree(name, dbRow);
       treeCache.set(name.toLowerCase(), { data: treeData, ts: Date.now() });
       return NextResponse.json(treeData);
     }
 
-    // 7. AI fallback — if key missing, serve graceful fallback immediately
-    if (!process.env.QWEN_API_KEY) {
-      console.warn('[Tree] QWEN_API_KEY missing — serving fallback tree.');
-      return NextResponse.json(buildFallbackTree(name, dbRow));
-    }
-
-    // 8. Build seed context from existing DB data
+    // 7. Seed context from existing DB data
     const seedContext = dbRow
       ? `Known data: meaning="${dbRow.primary_meaning ?? '?'}", root="${dbRow.linguistic_root ?? '?'}", region="${dbRow.region_origin ?? '?'}", culture="${dbRow.ethnicity_tribe ?? '?'}", context="${dbRow.contextual_meaning ?? '?'}". Enrich with historical branches.`
       : `No prior data. Research "${name}" from scratch using onomastic knowledge.`;
 
-    // 9. Direct fetch to DashScope REST API (bypasses OpenAI SDK compatibility issues)
-    const MODELS = ['qwen-max', 'qwen-plus', 'qwen-turbo'];
-    const apiKey = process.env.QWEN_API_KEY!;
-    const baseURL = process.env.QWEN_BASE_URL ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
-    let rawText = '';
-
-    outer: for (const model of MODELS) {
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          const controller = new AbortController();
-          const tid = setTimeout(() => controller.abort(), 25_000);
-
-          const res = await fetch(`${baseURL}/chat/completions`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              model,
-              messages: [
-                { role: 'system', content: SYSTEM_PROMPT },
-                { role: 'user',   content: `Generate etymology tree JSON for "${name}". ${seedContext}` },
-              ],
-              temperature: 0.7,
-            }),
-            signal: controller.signal,
-          });
-          clearTimeout(tid);
-
-          const json = await res.json();
-
-          if (!res.ok) {
-            console.warn(`[Tree] ${model} attempt ${attempt}/2 — API error: ${json?.error?.message ?? res.status}`);
-            if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
-            continue;
-          }
-
-          rawText = json?.choices?.[0]?.message?.content ?? '';
-          if (rawText) break outer;
-        } catch (err: any) {
-          const msg = err.name === 'AbortError' ? 'timeout (25s)' : err.message;
-          console.warn(`[Tree] ${model} attempt ${attempt}/2 failed — ${msg}`);
-          if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
-        }
-      }
-      if (!rawText) console.warn(`[Tree] ${model} exhausted — trying next model.`);
-    }
-
-    // 10. If AI failed after all retries — serve graceful fallback (never 502)
-    if (!rawText) {
-      console.error(`[Tree] AI failed for "${name}" after 3 attempts — serving fallback.`);
+    // 8. AI (validated); any failure → graceful fallback
+    let aiData;
+    try {
+      ({ data: aiData } = await chatJSON({
+        schema: TreeAISchema,
+        system: SYSTEM_PROMPT,
+        user: `Generate etymology tree JSON for "${name}". ${seedContext}`,
+        maxTokens: 1200,
+      }));
+    } catch (err) {
+      console.error(`[Tree] AI failed for "${name}": ${(err as Error)?.message} — serving fallback.`);
       const fallback = buildFallbackTree(name, dbRow);
       treeCache.set(name.toLowerCase(), { data: fallback, ts: Date.now() });
       return NextResponse.json(fallback);
     }
 
-    // 11. Parse AI response
-    let aiData: Omit<TreeData, 'name' | 'source'>;
-    try {
-      aiData = JSON.parse(rawText.replace(/```json\n?|```/g, '').trim());
-    } catch {
-      console.error('[Tree] JSON parse failed — serving fallback.');
-      return NextResponse.json(buildFallbackTree(name, dbRow));
-    }
-
     const treeData: TreeData = { name, ...aiData, source: 'ai' };
     treeCache.set(name.toLowerCase(), { data: treeData, ts: Date.now() });
 
-    // 12. Write enriched data back to DB using row id (not ilike — precise update)
+    // 9. Write enriched data back to DB by row id
     if (dbRow?.id) {
-      const admin = getAdmin();
+      const admin = getAdminClient();
       if (admin) {
         admin
           .from('names')
@@ -290,19 +235,17 @@ export async function POST(request: Request) {
             region_origin: aiData.region,
             ethnicity_tribe: aiData.tribe,
           })
-          .eq('id', dbRow.id) // Precise single-row update via PK, not ilike
-          .then(({ error }: any) => {
+          .eq('id', dbRow.id)
+          .then(({ error }) => {
             if (error) console.warn('[Tree] DB enrichment write failed:', error.message);
-            else console.log(`[Tree] Enriched DB row id=${dbRow.id} for "${name}"`);
           });
       }
     }
 
     return NextResponse.json(treeData);
 
-  } catch (error: any) {
-    // Final safety net — log internally, never expose stack to client
-    console.error('[Tree] Unhandled error:', error?.message ?? error);
+  } catch (error: unknown) {
+    console.error('[Tree] Unhandled error:', (error as Error)?.message ?? error);
     return NextResponse.json(
       { error: 'Etymology tree generation failed. Please try again.' },
       { status: 500 }

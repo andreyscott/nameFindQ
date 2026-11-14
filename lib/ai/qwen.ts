@@ -8,7 +8,7 @@ import type { ZodType } from 'zod';
  *  - embed():    text-embedding-v3 vector (1024 dims)
  *
  * Cost/latency policy: try at most two models (cheapest first), one attempt
- * each, inside a shared time budget. A 429 stops immediately.
+ * each, inside a shared time budget.
  */
 
 export type AiErrorKind = 'config' | 'rate_limited' | 'timeout' | 'invalid_output' | 'unavailable';
@@ -21,9 +21,10 @@ export class AiError extends Error {
 }
 
 const DEFAULT_BASE_URL = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
-// The current workspace key only has qwen-turbo access (see commit 649fc4d),
-// so the cheapest model goes first. Override with QWEN_CHAT_MODELS.
-const DEFAULT_MODELS = ['qwen-turbo', 'qwen-plus'];
+// qwen-plus first (turbo is currently rate-limited on this key); on
+// 429/403/invalid output we fall through to the next model.
+// Override with QWEN_CHAT_MODELS (comma-separated, max 2 used).
+const DEFAULT_MODELS = ['qwen-plus', 'qwen-turbo'];
 const MAX_MODELS = 2;
 const DEFAULT_BUDGET_MS = 20_000;
 
@@ -119,7 +120,13 @@ export async function chatJSON<T>(opts: ChatJSONOptions<T>): Promise<ChatJSONRes
       message?: string;
     } | null;
 
-    if (res.status === 429) throw new AiError('rate_limited', `${model} rate limited`);
+    if (res.status === 429) {
+      // Per-model quotas differ, so another model may still have capacity.
+      lastKind = 'rate_limited';
+      lastMessage = `${model} rate limited`;
+      console.warn(`[ai] ${lastMessage}`);
+      continue;
+    }
 
     if (!res.ok) {
       lastKind = 'unavailable';

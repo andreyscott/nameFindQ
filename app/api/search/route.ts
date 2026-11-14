@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/utils/supabase/server';
 import { rateLimit } from '@/lib/rateLimiter';
-import { getQwenClient } from '@/lib/qwenClient';
+import { embed, AiError } from '@/lib/ai/qwen';
 import postgres from 'postgres';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -82,37 +82,13 @@ export async function POST(request: Request) {
     query = (body?.query ?? '').trim();
     if (!query) return NextResponse.json({ error: 'Query is required.' }, { status: 400 });
     if (query.length > 200) return NextResponse.json({ error: 'Query must be 200 characters or fewer.' }, { status: 400 });
-    if (!process.env.QWEN_API_KEY) return NextResponse.json({ error: 'Server configuration error: QWEN_API_KEY missing.' }, { status: 500 });
 
     // 5. ── Embedding — check cache before calling API ───────────────────────
     let embeddingValues = getCachedEmbedding(query);
 
     if (!embeddingValues) {
-      const qwen = getQwenClient();
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12_000);
-
-      try {
-        const embeddingResponse = await qwen.embeddings.create(
-          { model: 'text-embedding-v3', input: query, dimensions: 1024 },
-          { signal: controller.signal }
-        );
-        clearTimeout(timeoutId);
-        embeddingValues = embeddingResponse.data?.[0]?.embedding ?? null;
-      } catch (err: any) {
-        clearTimeout(timeoutId);
-        const isAbort = err.name === 'AbortError' || err.code === 'ERR_CANCELED';
-        console.error(`[Search] Embedding failed: ${isAbort ? 'timeout (12s)' : err.message}`);
-        throw err;
-      }
-
-      if (!embeddingValues || embeddingValues.length !== 1024) {
-        throw new Error(`Invalid embedding from Qwen API. Expected 1024 values, got ${embeddingValues?.length ?? 0}.`);
-      }
-
-      // Cache the embedding — deterministic for this query string
+      embeddingValues = await embed(query);
       setCachedEmbedding(query, embeddingValues);
-      console.log(`[Search] Embedding computed and cached for: "${query}"`);
     } else {
       console.log(`[Search] Embedding cache hit for: "${query}"`);
     }
@@ -136,8 +112,7 @@ export async function POST(request: Request) {
     console.error('[Search] Error:', { query, message: (error as Error)?.message });
 
     const isRateLimit =
-      (error as { status?: number })?.status === 429 ||
-      (error instanceof Error && error.message.includes('429'));
+      error instanceof AiError && error.kind === 'rate_limited';
 
     if (isRateLimit) {
       return NextResponse.json(
