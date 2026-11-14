@@ -22,6 +22,7 @@ $ACR_PASSWORD  = $env:ACR_PASSWORD  ?? ""
 # Supabase public values — embedded in the Next.js client bundle at build time
 $SUPABASE_URL      = $env:NEXT_PUBLIC_SUPABASE_URL      ?? ""
 $SUPABASE_ANON_KEY = $env:NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ""
+$SITE_URL          = $env:NEXT_PUBLIC_SITE_URL          ?? ""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 function Info($msg)    { Write-Host "[INFO]  $msg" -ForegroundColor Cyan    }
@@ -39,6 +40,7 @@ $required = @{
     ACR_PASSWORD  = $ACR_PASSWORD
     NEXT_PUBLIC_SUPABASE_URL       = $SUPABASE_URL
     NEXT_PUBLIC_SUPABASE_ANON_KEY  = $SUPABASE_ANON_KEY
+    NEXT_PUBLIC_SITE_URL           = $SITE_URL
 }
 foreach ($key in $required.Keys) {
     if ([string]::IsNullOrWhiteSpace($required[$key])) {
@@ -67,6 +69,7 @@ Info "Building Docker image ..."
 docker build `
     --build-arg "NEXT_PUBLIC_SUPABASE_URL=$SUPABASE_URL" `
     --build-arg "NEXT_PUBLIC_SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY" `
+    --build-arg "NEXT_PUBLIC_SITE_URL=$SITE_URL" `
     --tag $FULL_IMAGE `
     --tag $LATEST_IMAGE `
     --file Dockerfile `
@@ -102,6 +105,8 @@ Write-Host "    SUPABASE_SERVICE_ROLE_KEY        (secret)"
 Write-Host "    DATABASE_URL                     (secret)"
 Write-Host "    QWEN_API_KEY                     (secret)"
 Write-Host "    QWEN_BASE_URL                    (optional)"
+Write-Host "    TRUSTED_IP_HEADER                (header your FC gateway sets with the client IP)"
+Write-Host "    QUOTA_SALT                       (secret, any random string)"
 Write-Host ""
 Warn "Never put secrets into the Dockerfile or this script."
 Write-Host ""

@@ -37,6 +37,7 @@ REQUIRED_VARS=(
   ACR_REGISTRY ACR_NAMESPACE ACR_REPO ACR_TAG
   ACR_USERNAME ACR_PASSWORD
   NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY
+  NEXT_PUBLIC_SITE_URL
 )
 for var in "${REQUIRED_VARS[@]}"; do
   [[ -z "${!var:-}" ]] && error "Required variable '$var' is not set."
@@ -64,6 +65,7 @@ info "Building Docker image ..."
 docker build \
   --build-arg NEXT_PUBLIC_SUPABASE_URL="${NEXT_PUBLIC_SUPABASE_URL}" \
   --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="${NEXT_PUBLIC_SUPABASE_ANON_KEY}" \
+  --build-arg NEXT_PUBLIC_SITE_URL="${NEXT_PUBLIC_SITE_URL}" \
   --tag "${FULL_IMAGE}" \
   --tag "${LATEST_IMAGE}" \
   --file Dockerfile \
@@ -96,6 +98,8 @@ echo "    SUPABASE_SERVICE_ROLE_KEY        (secret)"
 echo "    DATABASE_URL                     (secret)"
 echo "    QWEN_API_KEY                     (secret)"
 echo "    QWEN_BASE_URL                    (optional)"
+echo "    TRUSTED_IP_HEADER                (header your FC gateway sets with the client IP)"
+echo "    QUOTA_SALT                       (secret, any random string)"
 echo ""
 warn "Never put secrets into the Dockerfile or this script."
 echo ""

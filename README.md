@@ -11,7 +11,7 @@
 
 ## Prerequisites
 
-- Node.js v18+ and npm (or yarn/pnpm)
+- Node.js v20.9+ (Next.js 16 requirement) and npm
 - A [Supabase](https://supabase.com) project (PostgreSQL with the `pgvector` extension enabled)
 - A Qwen / Alibaba Cloud DashScope API key
 - Docker (only for container builds)
@@ -36,25 +36,13 @@
 
 3. **Configure environment variables**
 
-   Create a `.env.local` file in the project root:
-
-   ```env
-   # Supabase (Project Settings -> API)
-   NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-   SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-
-   # Direct Postgres connection string (Project Settings -> Database)
-   DATABASE_URL=postgresql://postgres:<password>@<host>:5432/postgres
-
-   # Qwen / DashScope
-   QWEN_API_KEY=your-dashscope-api-key
-   QWEN_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-   ```
+   Copy `.env.example` to `.env.local` and fill in the values. It documents every variable, including `NEXT_PUBLIC_SITE_URL` (used for OAuth redirects) and optional quota settings.
 
    > Never commit `.env.local`. `SUPABASE_SERVICE_ROLE_KEY` is a server-side secret.
 
 4. **Initialize the database**
+
+   Run `supabase/schema.sql`, then each file in `supabase/migrations/` in name order, in the Supabase SQL editor. The migrations add `names.source` (which protects the curated seed names from AI overwrites) and the `api_usage` quota table. Then:
 
    ```bash
    npm run db:seed        # seed the names data
@@ -81,12 +69,18 @@
 | `npm run test:unit` / `npm run test:logic` | Run specific test suites |
 | `npm run docker:build` | Build and push the Docker image |
 
-## Docker & Deployment
+## Deployment
 
-To build the production Docker image (targeted at Alibaba Cloud FC 3.0):
+The app deploys to **Vercel** (live) and to **Alibaba Cloud Function Compute 3.0** via Docker. Before deploying a new version, apply any new files in `supabase/migrations/`.
+
+### Vercel
+
+Set the variables from `.env.example` in the project settings. `NEXT_PUBLIC_SITE_URL` is optional on Vercel (it falls back to the production URL).
+
+### Docker / Alibaba FC 3.0
 
 ```bash
 npm run docker:build
 ```
 
-The app is bundled as a standalone Next.js server that runs as a serverless container. Provide the same environment variables as above in your deployment configuration.
+The image (Node 22, standalone Next.js server) needs `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `NEXT_PUBLIC_SITE_URL` at **build** time. Set the server secrets at runtime in FC. Set `TRUSTED_IP_HEADER` to the header your FC gateway uses for the client IP, so the free-tier limits are counted per visitor.
