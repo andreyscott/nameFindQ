@@ -5,41 +5,13 @@ import { getAdminClient } from '@/utils/supabase/admin';
 import { consumeRequest, consumeAiBudget, subjectFor, quotaDeniedResponse } from '@/lib/quota';
 import { getClientIp } from '@/lib/clientIp';
 import { chatJSON } from '@/lib/ai/qwen';
-import { TreeAISchema, type TreeBranch } from '@/lib/ai/schemas';
+import { TreeAISchema } from '@/lib/ai/schemas';
+import { buildFallbackTree, isSufficient, mapDbToTree, type DbNameRow, type TreeData } from '@/lib/tree';
+import { apiErrorResponse } from '@/lib/apiError';
 import { INJECTION_GUARD, buildTreeUserPrompt } from '@/lib/ai/prompts';
 import { escapeLike } from '@/lib/text';
 
-export type { TreeBranch };
-
-// ── Tree Data Shape ───────────────────────────────────────────────────────────
-export interface TreeData {
-  name: string;
-  root_label: string;
-  root_meaning: string;
-  primary_epoch: string;
-  primary_context: string;
-  region: string;
-  tribe: string;
-  branches: [TreeBranch, TreeBranch, TreeBranch];
-  narrative: string;
-  source: 'db' | 'ai' | 'fallback';
-}
-
-interface DbRow {
-  id: string;
-  source: 'seed' | 'ai';
-  linguistic_root: string | null;
-  primary_meaning: string | null;
-  contextual_meaning: string | null;
-  region_origin: string | null;
-  ethnicity_tribe: string | null;
-  etymology: {
-    era?: string;
-    context?: string;
-    historical_context?: string;
-    related_variants?: string[];
-  } | null;
-}
+export type { TreeData, TreeDisplayBranch } from '@/lib/tree';
 
 const RequestSchema = z.object({
   name: z.string().trim().min(1, 'Name is required.').max(100, 'Name too long.'),
@@ -89,69 +61,6 @@ function getCachedTree(name: string): TreeData | null {
   return entry.data;
 }
 
-// ── Sufficiency check: root + some context + region is enough ─────────────────
-function isSufficient(data: DbRow): boolean {
-  const hasRoot = typeof data.linguistic_root === 'string' && data.linguistic_root.length > 8;
-  const hasContext =
-    (data.etymology?.historical_context?.length ?? 0) > 30 ||
-    (data.contextual_meaning?.length ?? 0) > 30;
-  const hasRegion = !!(data.region_origin || data.ethnicity_tribe);
-  return hasRoot && hasContext && hasRegion;
-}
-
-// ── Map Supabase row → TreeData ───────────────────────────────────────────────
-function mapDbToTree(name: string, d: DbRow): TreeData {
-  const variants: string[] = d.etymology?.related_variants ?? [];
-  const types: TreeBranch['variant_type'][] = ['Direct', 'Extended', 'Feminine'];
-  const tribe = d.ethnicity_tribe ?? d.region_origin ?? 'Regional';
-
-  const branches = types.map((vt, i) => ({
-    name: variants[i] ?? `${name}${['i', 'e', 'a'][i]}`,
-    meaning: 'Linguistic variant',
-    variant_type: vt,
-    sub_variant: (variants[i] ?? name) + (i === 2 ? 'a' : 'o'),
-    sub_variant_region: tribe,
-  })) as [TreeBranch, TreeBranch, TreeBranch];
-
-  return {
-    name,
-    root_label: d.linguistic_root ?? name,
-    root_meaning: (d.primary_meaning ?? '').split(' ').slice(0, 4).join(' '),
-    primary_epoch: d.etymology?.context ?? d.etymology?.era ?? 'Historical period',
-    primary_context: d.etymology?.historical_context ?? d.contextual_meaning ?? '',
-    region: d.region_origin ?? 'Unknown region',
-    tribe: d.ethnicity_tribe ?? 'Unknown culture',
-    branches,
-    narrative: `${name} carries the essence of ${tribe} heritage. ${d.contextual_meaning ?? d.etymology?.historical_context ?? ''}`,
-    source: 'db',
-  };
-}
-
-// ── Graceful fallback — returned when AI fails ────────────────────────────────
-function buildFallbackTree(name: string, dbRow: DbRow | null): TreeData {
-  const cap = name.charAt(0).toUpperCase() + name.slice(1);
-  const base = dbRow?.linguistic_root ?? name;
-  const ctx = dbRow?.contextual_meaning ?? dbRow?.etymology?.historical_context ??
-    `${cap} is a name with deep historical and cultural significance, passed down through generations.`;
-
-  return {
-    name: cap,
-    root_label: base,
-    root_meaning: (dbRow?.primary_meaning ?? 'Ancient root').split(' ').slice(0, 4).join(' '),
-    primary_epoch: dbRow?.etymology?.era ?? 'Historical',
-    primary_context: ctx,
-    region: dbRow?.region_origin ?? 'Unknown region',
-    tribe: dbRow?.ethnicity_tribe ?? 'Unknown culture',
-    branches: [
-      { name: cap + 'a',   meaning: 'Feminine variant',   variant_type: 'Feminine',   sub_variant: cap + 'ah', sub_variant_region: 'Regional'  },
-      { name: cap + 'i',   meaning: 'Extended form',      variant_type: 'Extended',   sub_variant: cap + 'io', sub_variant_region: 'Modern'    },
-      { name: cap.slice(0, -1) || cap, meaning: 'Short form', variant_type: 'Short Form', sub_variant: cap + 'el', sub_variant_region: 'Diaspora' },
-    ],
-    narrative: `${cap} carries an enduring legacy across time and culture. ${ctx}`,
-    source: 'fallback',
-  };
-}
-
 // ── POST /api/tree ────────────────────────────────────────────────────────────
 export async function POST(request: Request) {
   try {
@@ -189,7 +98,7 @@ export async function POST(request: Request) {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    const dbRow = (dbRowData as DbRow | null) ?? null;
+    const dbRow = (dbRowData as DbNameRow | null) ?? null;
 
     // 6. Serve from DB if sufficient
     if (dbRow && isSufficient(dbRow)) {
@@ -213,9 +122,8 @@ export async function POST(request: Request) {
       }));
     } catch (err) {
       console.error(`[Tree] AI failed for "${name}": ${(err as Error)?.message} — serving fallback.`);
-      const fallback = buildFallbackTree(name, dbRow);
-      treeCache.set(name.toLowerCase(), { data: fallback, ts: Date.now() });
-      return NextResponse.json(fallback);
+      // Not cached, so the next request can get a real tree once the AI recovers.
+      return NextResponse.json(buildFallbackTree(name, dbRow));
     }
 
     const treeData: TreeData = { name, ...aiData, source: 'ai' };
@@ -248,10 +156,7 @@ export async function POST(request: Request) {
     return NextResponse.json(treeData);
 
   } catch (error: unknown) {
-    console.error('[Tree] Unhandled error:', (error as Error)?.message ?? error);
-    return NextResponse.json(
-      { error: 'Etymology tree generation failed. Please try again.' },
-      { status: 500 }
-    );
+    const { status, body } = apiErrorResponse(error, 'Tree');
+    return NextResponse.json(body, { status });
   }
 }

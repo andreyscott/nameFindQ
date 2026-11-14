@@ -4,7 +4,8 @@ import { createClient } from '@/utils/supabase/server';
 import { getAdminClient } from '@/utils/supabase/admin';
 import { consumeRequest, consumeAiBudget, subjectFor, quotaDeniedResponse } from '@/lib/quota';
 import { getClientIp } from '@/lib/clientIp';
-import { chatJSON, AiError } from '@/lib/ai/qwen';
+import { chatJSON } from '@/lib/ai/qwen';
+import { apiErrorResponse } from '@/lib/apiError';
 import { NameResultSchema, type NameResponse } from '@/lib/ai/schemas';
 import { INJECTION_GUARD, buildNamefindUserPrompt, toAiNameRows } from '@/lib/ai/prompts';
 
@@ -206,24 +207,8 @@ export async function POST(request: Request) {
     return NextResponse.json(withShortMeaning(data), { headers: quotaHeaders });
 
   } catch (error: unknown) {
-    console.error('[Namefind] Error:', { query: currentQuery, message: (error as Error)?.message });
-
-    // Graceful degradation on Qwen rate-limit (replaced in F6)
-    if (error instanceof AiError && error.kind === 'rate_limited') {
-      const q = currentQuery || 'Unknown';
-      const cap = q.charAt(0).toUpperCase() + q.slice(1);
-      return NextResponse.json({
-        query_tags: ['RATE_LIMITED', q.toUpperCase()],
-        results: [
-          { name: cap, short_meaning: 'Quota reached — please try again shortly.', primary_meaning: 'Quota reached — please try again shortly.' },
-          { name: cap + 'ian', short_meaning: 'Variant placeholder', primary_meaning: 'Variant placeholder' },
-        ],
-      });
-    }
-
-    return NextResponse.json(
-      { error: (error as Error)?.message || 'Failed to process onomastic request.' },
-      { status: 500 }
-    );
+    // No fabricated placeholder names — the client shows an honest error state.
+    const { status, body } = apiErrorResponse(error, `Namefind "${currentQuery.slice(0, 60)}"`);
+    return NextResponse.json(body, { status });
   }
 }

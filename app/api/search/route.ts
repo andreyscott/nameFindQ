@@ -3,7 +3,8 @@ import { createClient } from '@/utils/supabase/server';
 import { z } from 'zod';
 import { consumeRequest, consumeAiBudget, subjectFor, quotaDeniedResponse } from '@/lib/quota';
 import { getClientIp } from '@/lib/clientIp';
-import { embed, AiError } from '@/lib/ai/qwen';
+import { embed } from '@/lib/ai/qwen';
+import { apiErrorResponse } from '@/lib/apiError';
 import postgres from 'postgres';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -122,19 +123,7 @@ export async function POST(request: Request) {
     );
 
   } catch (error: unknown) {
-    console.error('[Search] Error:', { query, message: (error as Error)?.message });
-
-    const isRateLimit =
-      error instanceof AiError && error.kind === 'rate_limited';
-
-    if (isRateLimit) {
-      return NextResponse.json(
-        { error: 'Embedding service rate limited. Please try again shortly.' },
-        { status: 429 }
-      );
-    }
-
-    const message = error instanceof Error ? error.message : 'Semantic search failed.';
-    return NextResponse.json({ error: message }, { status: 500 });
+    const { status, body } = apiErrorResponse(error, `Search "${query.slice(0, 60)}"`);
+    return NextResponse.json(body, { status });
   }
 }
