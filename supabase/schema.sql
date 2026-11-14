@@ -122,3 +122,6 @@ CREATE INDEX IF NOT EXISTS idx_names_vibe_tags_gin ON public.names USING gin (vi
 
 -- 3. Optimization for JSONB filters in history
 CREATE INDEX IF NOT EXISTS idx_search_history_filters ON public.search_history USING gin (filters);
+
+-- names.source (seed | ai) and upsert_ai_names(): see
+-- supabase/migrations/20261114000100_names_source.sql

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { TreeData, TreeBranch } from "../api/tree/route";
+import type { TreeData } from "@/lib/tree";
 
 // ── Static demo shown when no name is passed ──────────────────────────────
 const DEMO: TreeData = {
@@ -42,7 +42,7 @@ export function EtymologyTree({ name }: Props) {
   const [tree, setTree] = useState<TreeData | null>(name ? null : DEMO);
   const [loading, setLoading] = useState(!!name);
   const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<'db' | 'ai' | null>(null);
+  const [source, setSource] = useState<TreeData["source"] | null>(null);
 
   useEffect(() => {
     if (!name) {
@@ -69,8 +69,8 @@ export function EtymologyTree({ name }: Props) {
           setTree(json as TreeData);
           setSource(json.source ?? "ai");
         }
-      } catch (err: any) {
-        if (!cancelled) setError(err.message ?? "Could not load etymology tree.");
+      } catch (err: unknown) {
+        if (!cancelled) setError((err as Error)?.message ?? "Could not load etymology tree.");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -118,14 +118,14 @@ export function EtymologyTree({ name }: Props) {
     );
   }
 
-  const [b0, b1, b2] = tree.branches;
+  const branches = (tree.branches ?? []).slice(0, 3);
 
   return (
     <div className="w-full flex flex-col items-center py-12 relative z-10 font-sans">
 
       {/* Source badge */}
       <AnimatePresence>
-        {source === "ai" && (
+        {(source === "ai" || source === "fallback") && (
           <motion.div
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
@@ -133,7 +133,7 @@ export function EtymologyTree({ name }: Props) {
           >
             <span className="w-1.5 h-1.5 rounded-full bg-black/30 inline-block animate-pulse" />
             <span className="font-mono text-[8px] tracking-[0.25em] uppercase text-black/30">
-              AI Enriched
+              {source === "ai" ? "AI Enriched" : "Limited data"}
             </span>
           </motion.div>
         )}
@@ -154,7 +154,7 @@ export function EtymologyTree({ name }: Props) {
         >
           <span className="font-serif text-2xl italic">{tree.root_label}</span>
         </motion.div>
-        <div className="text-xs text-black/60 mt-2">{tree.root_meaning}</div>
+        {tree.root_meaning && <div className="text-xs text-black/60 mt-2">{tree.root_meaning}</div>}
       </div>
 
       <div className="w-px h-12 bg-black/20 my-2" />
@@ -176,19 +176,32 @@ export function EtymologyTree({ name }: Props) {
         </motion.div>
       </div>
 
+      {branches.length === 0 ? (
+        /* ── No documented variants: say so instead of inventing any ── */
+        <p className="mt-8 max-w-sm text-center text-xs leading-relaxed text-black/60">
+          {tree.primary_context || `No documented variants for ${tree.name} yet.`}
+        </p>
+      ) : (
+      <>
       <div className="w-px h-8 bg-black/20 my-2" />
 
       {/* ── Horizontal branch ─────────────────────────────────────────── */}
-      <div className="w-[280px] md:w-[400px] h-px bg-black/20" />
-      <div className="w-[280px] md:w-[400px] flex justify-between">
-        <div className="w-px h-6 bg-black/20 ml-12" />
+      {branches.length === 3 ? (
+        <>
+          <div className="w-[280px] md:w-[400px] h-px bg-black/20" />
+          <div className="w-[280px] md:w-[400px] flex justify-between">
+            <div className="w-px h-6 bg-black/20 ml-12" />
+            <div className="w-px h-6 bg-black/20" />
+            <div className="w-px h-6 bg-black/20 mr-12" />
+          </div>
+        </>
+      ) : (
         <div className="w-px h-6 bg-black/20" />
-        <div className="w-px h-6 bg-black/20 mr-12" />
-      </div>
+      )}
 
-      {/* ── Three Branch Children ─────────────────────────────────────── */}
-      <div className="w-full max-w-[320px] md:max-w-[440px] flex justify-between -mt-[1px]">
-        {[b0, b1, b2].map((branch, i) => (
+      {/* ── Branch Children (1–3) ─────────────────────────────────────── */}
+      <div className={`w-full max-w-[320px] md:max-w-[440px] flex -mt-[1px] ${branches.length === 3 ? "justify-between" : "justify-center gap-6"}`}>
+        {branches.map((branch, i) => (
           <motion.div
             key={branch.name}
             initial={{ opacity: 0 }}
@@ -202,23 +215,33 @@ export function EtymologyTree({ name }: Props) {
             <div className="text-[8px] uppercase tracking-widest text-black/40 mt-2">
               {branch.variant_type}
             </div>
-            <div className="w-px h-8 bg-black/20 mt-4" />
-            <div className="border border-black border-dashed px-4 py-2 mt-4 text-center">
-              <span className="font-serif text-sm">{branch.sub_variant}</span>
-            </div>
-            <div className="text-[7px] uppercase tracking-widest text-black/40 mt-1">
-              {branch.sub_variant_region}
-            </div>
+            {branch.sub_variant && (
+              <>
+                <div className="w-px h-8 bg-black/20 mt-4" />
+                <div className="border border-black border-dashed px-4 py-2 mt-4 text-center">
+                  <span className="font-serif text-sm">{branch.sub_variant}</span>
+                </div>
+                {branch.sub_variant_region && (
+                  <div className="text-[7px] uppercase tracking-widest text-black/40 mt-1">
+                    {branch.sub_variant_region}
+                  </div>
+                )}
+              </>
+            )}
           </motion.div>
         ))}
       </div>
+      </>
+      )}
 
       {/* ── Narrative ─────────────────────────────────────────────────── */}
-      <div className="w-full max-w-sm mt-16 pt-8 border-t border-black/10 text-center">
-        <p className="text-sm leading-relaxed text-black/80 font-sans">
-          {tree.narrative}
-        </p>
-      </div>
+      {tree.narrative && (
+        <div className="w-full max-w-sm mt-16 pt-8 border-t border-black/10 text-center">
+          <p className="text-sm leading-relaxed text-black/80 font-sans">
+            {tree.narrative}
+          </p>
+        </div>
+      )}
 
       {/* ── Action Buttons ────────────────────────────────────────────── */}
       <div className="flex gap-4 mt-12 w-full max-w-xs">

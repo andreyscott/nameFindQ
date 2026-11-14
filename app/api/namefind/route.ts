@@ -1,29 +1,19 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/utils/supabase/server';
-import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { z } from 'zod';
-import { rateLimit } from '@/lib/rateLimiter';
-import { getQwenClient } from '@/lib/qwenClient';
+import { createClient } from '@/utils/supabase/server';
+import { getAdminClient } from '@/utils/supabase/admin';
+import { consumeRequest, consumeAiBudget, subjectFor, quotaDeniedResponse } from '@/lib/quota';
+import { getClientIp } from '@/lib/clientIp';
+import { chatJSON } from '@/lib/ai/qwen';
+import { apiErrorResponse } from '@/lib/apiError';
+import { NameResultSchema, type NameResponse } from '@/lib/ai/schemas';
+import { INJECTION_GUARD, buildNamefindUserPrompt, toAiNameRows } from '@/lib/ai/prompts';
 
-// ── Schema ────────────────────────────────────────────────────────────────────
-const NameResultSchema = z.object({
-  query_tags: z.array(z.string()),
-  results: z.array(
-    z.object({
-      name: z.string(),
-      primary_meaning: z.string(),
-      contextual_meaning: z.string().optional(),
-      region_origin: z.string().optional(),
-      ethnicity_tribe: z.string().optional(),
-      linguistic_root: z.string().optional(),
-      gender: z.string().optional(),
-      pronunciation: z.string().optional(),
-      etymology_node: z.any().optional(),
-    })
-  ),
+// ── Request schema ───────────────────────────────────────────────────────────
+const RequestSchema = z.object({
+  query: z.string().trim().min(1, 'Query is required.').max(300, 'Query must be 300 characters or fewer.'),
+  type: z.enum(['vibe', 'blend']).default('vibe'),
 });
-
-type NameResponse = z.infer<typeof NameResultSchema>;
 
 // ── System prompt ────────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are an expert onomastic historian and linguistic analyst specializing in global name origins.
@@ -51,7 +41,9 @@ Required JSON structure:
   ]
 }
 
-Return 5 name results for vibe or semantic queries, and 3 for blend queries.`;
+Return 5 name results for vibe queries, and 3 for blend queries.
+
+${INJECTION_GUARD}`;
 
 // ── In-memory result cache (1 hour TTL) ──────────────────────────────────────
 const cache = new Map<string, { data: NameResponse; ts: number }>();
@@ -64,17 +56,28 @@ function getCached(key: string): NameResponse | null {
   return entry.data;
 }
 
+interface NameRow {
+  name: string;
+  primary_meaning: string | null;
+  contextual_meaning: string | null;
+  region_origin: string | null;
+  ethnicity_tribe: string | null;
+  linguistic_root: string | null;
+  gender: string | null;
+  pronunciation: string | null;
+  etymology: { era?: string; historical_context?: string } | null;
+}
+
 // ── DB-first lookup — returns results from Supabase if rich enough ────────────
-// Fires only for vibe/semantic modes (blend always needs AI synthesis).
-// Matches against primary_meaning, contextual_meaning, and ethnicity_tribe.
+// Blend always needs AI synthesis. Matches primary_meaning, contextual_meaning
+// and ethnicity_tribe.
 async function tryDbFirst(
   supabase: Awaited<ReturnType<typeof createClient>>,
   query: string,
-  type: string
+  type: 'vibe' | 'blend'
 ): Promise<NameResponse | null> {
-  if (type === 'blend') return null; // Synthesized names always need AI
+  if (type === 'blend') return null;
 
-  // Extract meaningful keywords (skip stopwords and short words)
   const stopwords = new Set(['names', 'name', 'with', 'that', 'from', 'the', 'and', 'for', 'are']);
   const keywords = query
     .toLowerCase()
@@ -84,22 +87,20 @@ async function tryDbFirst(
 
   if (keywords.length === 0) return null;
 
-  // Run keyword searches in parallel for speed
   const searches = keywords.map(kw =>
     supabase
       .from('names')
-      .select('name, primary_meaning, contextual_meaning, region_origin, ethnicity_tribe, linguistic_root, gender, pronunciation, etymology, vibe_tags')
+      .select('name, primary_meaning, contextual_meaning, region_origin, ethnicity_tribe, linguistic_root, gender, pronunciation, etymology')
       .or(`primary_meaning.ilike.%${kw}%,contextual_meaning.ilike.%${kw}%,ethnicity_tribe.ilike.%${kw}%`)
       .limit(5)
   );
 
   const settled = await Promise.all(searches);
 
-  // Merge and deduplicate by name
   const seen = new Set<string>();
-  const merged: any[] = [];
+  const merged: NameRow[] = [];
   for (const { data } of settled) {
-    for (const row of data ?? []) {
+    for (const row of (data ?? []) as NameRow[]) {
       if (!seen.has(row.name)) {
         seen.add(row.name);
         merged.push(row);
@@ -107,53 +108,34 @@ async function tryDbFirst(
     }
   }
 
-  // Need at least 3 results to be useful
   if (merged.length < 3) return null;
-
-  const results = merged.slice(0, 5).map((r: any) => ({
-    name: r.name,
-    primary_meaning: r.primary_meaning ?? '',
-    contextual_meaning: r.contextual_meaning ?? undefined,
-    region_origin: r.region_origin ?? undefined,
-    ethnicity_tribe: r.ethnicity_tribe ?? undefined,
-    linguistic_root: r.linguistic_root ?? undefined,
-    gender: r.gender ?? undefined,
-    pronunciation: r.pronunciation ?? undefined,
-    etymology_node: r.etymology ?? undefined,
-    short_meaning: r.primary_meaning ?? '',
-  }));
 
   return {
     query_tags: keywords.map(k => k.toUpperCase()),
-    results,
+    results: merged.slice(0, 5).map((r) => ({
+      name: r.name,
+      primary_meaning: r.primary_meaning ?? '',
+      contextual_meaning: r.contextual_meaning ?? undefined,
+      region_origin: r.region_origin ?? undefined,
+      ethnicity_tribe: r.ethnicity_tribe ?? undefined,
+      linguistic_root: r.linguistic_root ?? undefined,
+      gender: r.gender ?? undefined,
+      pronunciation: r.pronunciation ?? undefined,
+      etymology_node: r.etymology
+        ? { era: r.etymology.era, historical_context: r.etymology.historical_context }
+        : undefined,
+    })),
   };
 }
 
-// ── User prompt builder ───────────────────────────────────────────────────────
-function buildUserPrompt(query: string, type: string): string {
-  if (type === 'blend') {
-    return `Blend query: "${query}". Merge phonetic and semantic qualities of both roots into 3 synthesized name variations with full etymologies.`;
-  }
-  return `Vibe query: "${query}". Return the 5 best matching names (real or synthesized) with etymologies and migration data.`;
-}
-
-// ── Lazy admin client — created only when a DB write is needed ────────────────
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _admin: any = null;
-function getAdmin(): any {
-  if (!_admin && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    _admin = createAdminClient<any, any>(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
-  }
-  return _admin;
+// Backward-compat alias consumed by the results page.
+function withShortMeaning(data: NameResponse) {
+  return { ...data, results: data.results.map(r => ({ ...r, short_meaning: r.primary_meaning })) };
 }
 
 // ── POST /api/namefind ────────────────────────────────────────────────────────
 export async function POST(request: Request) {
   let currentQuery = 'Unknown';
-  let currentType = 'vibe';
 
   try {
     // 1. Content-Type guard
@@ -161,168 +143,70 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Content-Type must be application/json.' }, { status: 415 });
     }
 
-    // 2. Auth
+    // 2. Parse & validate body
+    const parsed = RequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid request.' }, { status: 400 });
+    }
+    const { query, type } = parsed.data;
+    currentQuery = query;
+
+    // 3. Identify the caller (signed in → per-user quota, else per-IP free tier)
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Authentication required. Please sign in.' }, { status: 401 });
+
+    // 4. Shared quota (burst + daily), stored in Supabase
+    const quota = await consumeRequest('search', subjectFor(user?.id, getClientIp(request.headers)));
+    if (!quota.allowed) {
+      const denied = quotaDeniedResponse(quota, !!user);
+      return NextResponse.json(denied.body, { status: denied.status });
     }
-
-    // 3. Rate limit (30 req/min per user)
-    if (!rateLimit(user.id, 30, 60_000)) {
-      return NextResponse.json({ error: 'Too many requests. Please wait a moment and try again.' }, { status: 429 });
-    }
-
-    // 4. Parse & validate body
-    const body = await request.json();
-    currentQuery = (body.query || '').trim();
-    currentType = body.type || 'vibe';
-
-    if (!currentQuery) return NextResponse.json({ error: 'Query is required.' }, { status: 400 });
-    if (currentQuery.length > 300) return NextResponse.json({ error: 'Query must be 300 characters or fewer.' }, { status: 400 });
-    if (!process.env.QWEN_API_KEY) return NextResponse.json({ error: 'Server configuration error.' }, { status: 500 });
+    const quotaHeaders = { 'X-Quota-Limit': String(quota.limit), 'X-Quota-Remaining': String(quota.remaining) };
 
     // 5. In-memory cache
-    const cacheKey = `${currentType}::${currentQuery.toLowerCase()}`;
+    const cacheKey = `${type}::${query.toLowerCase()}`;
     const cached = getCached(cacheKey);
-    if (cached) return NextResponse.json(cached);
+    if (cached) return NextResponse.json(withShortMeaning(cached), { headers: quotaHeaders });
 
-    // 6. ── DB-first lookup ─────────────────────────────────────────────────
-    // Avoids AI call entirely when we already have matching names in Supabase.
-    const dbResult = await tryDbFirst(supabase, currentQuery, currentType);
+    // 6. DB-first lookup
+    const dbResult = await tryDbFirst(supabase, query, type);
     if (dbResult) {
-      console.log(`[Namefind] DB-first hit for query: "${currentQuery}" (${dbResult.results.length} results)`);
       cache.set(cacheKey, { data: dbResult, ts: Date.now() });
-      return NextResponse.json(dbResult);
+      return NextResponse.json(withShortMeaning(dbResult), { headers: quotaHeaders });
     }
 
-    // 7. ── Direct fetch to DashScope REST API ────────────────────────────
-    // Bypasses the OpenAI SDK entirely — SDK compatibility issues with Qwen's
-    // DashScope endpoint were causing persistent empty-output errors.
-    const userPrompt = buildUserPrompt(currentQuery, currentType);
-    const MODELS = ['qwen-max', 'qwen-plus', 'qwen-turbo'];
-    const apiKey = process.env.QWEN_API_KEY!;
-    const baseURL = process.env.QWEN_BASE_URL ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
-    let rawText = '';
-    let lastError = '';
-
-    outer: for (const model of MODELS) {
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          const controller = new AbortController();
-          const tid = setTimeout(() => controller.abort(), 25_000);
-
-          const res = await fetch(`${baseURL}/chat/completions`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              model,
-              messages: [
-                { role: 'system', content: SYSTEM_PROMPT },
-                { role: 'user',   content: userPrompt },
-              ],
-              temperature: 0.7,
-            }),
-            signal: controller.signal,
-          });
-          clearTimeout(tid);
-
-          const json = await res.json();
-
-          if (!res.ok) {
-            lastError = json?.error?.message ?? json?.message ?? `HTTP ${res.status}`;
-            console.warn(`[Namefind] ${model} attempt ${attempt}/2 — API error: ${lastError}`);
-            if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
-            continue;
-          }
-
-          rawText = json?.choices?.[0]?.message?.content ?? '';
-          if (rawText) break outer;
-          lastError = 'Empty response from model';
-        } catch (err: any) {
-          lastError = err.name === 'AbortError' ? 'Request timed out (25s)' : (err.message ?? 'Unknown error');
-          console.warn(`[Namefind] ${model} attempt ${attempt}/2 failed — ${lastError}`);
-          if (attempt < 2) await new Promise(r => setTimeout(r, 1_000));
-        }
-      }
-      if (!rawText) console.warn(`[Namefind] ${model} exhausted — trying next model.`);
+    // 7. AI (validated), charged against the site-wide daily budget
+    if (!(await consumeAiBudget())) {
+      return NextResponse.json(
+        { error: 'Namefinder has reached its daily AI limit. Please try again tomorrow.', code: 'ai_budget' },
+        { status: 503 }
+      );
     }
-
-    if (!rawText) throw new Error(`AI unavailable. Last error: ${lastError}`);
-
-    // 8. Parse
-    const cleanedText = rawText.replace(/```json\n?|```/g, '').trim();
-    const data = JSON.parse(cleanedText);
-
-    if (!data.query_tags || !Array.isArray(data.results)) {
-      throw new Error('Qwen returned an incomplete data structure.');
-    }
-
-    // Backward-compat alias
-    data.results = data.results.map((r: any) => ({
-      ...r,
-      short_meaning: r.primary_meaning || r.short_meaning || '',
-    }));
-
+    const { data, model } = await chatJSON({
+      schema: NameResultSchema,
+      system: SYSTEM_PROMPT,
+      user: buildNamefindUserPrompt(query, type),
+      maxTokens: 1800,
+    });
+    console.log(`[Namefind] ${model} answered (${data.results.length} results)`);
     cache.set(cacheKey, { data, ts: Date.now() });
 
-    // 9. ── Upsert into Supabase (fire-and-forget) ──────────────────────────
-    // Uses upsert + onConflict so re-querying the same names enriches existing
-    // rows instead of creating duplicates.
-    const admin = getAdmin();
+    // 8. Write back before responding, so every returned name already exists
+    //    when the user clicks Save. The RPC never modifies curated seed rows —
+    //    see supabase/migrations/20261114000100_names_source.sql.
+    const admin = getAdminClient();
     if (admin) {
-      const namesToUpsert = data.results.map((r: any) => ({
-        name: r.name,
-        primary_meaning: r.primary_meaning || '',
-        contextual_meaning: r.contextual_meaning || null,
-        region_origin: r.region_origin || null,
-        ethnicity_tribe: r.ethnicity_tribe || null,
-        linguistic_root: r.linguistic_root || null,
-        gender: r.gender || null,
-        pronunciation: r.pronunciation || null,
-        vibe_tags: data.query_tags || [],
-        etymology: r.etymology_node || null,
-      }));
-
-      admin
-        .from('names')
-        .upsert(namesToUpsert, { onConflict: 'name', ignoreDuplicates: false })
-        .then(({ error }: any) => {
-          if (error) console.error('[Namefind] Supabase upsert error:', error.message);
-          else console.log(`[Namefind] Upserted ${namesToUpsert.length} names to DB`);
-        });
+      const { error } = await admin.rpc('upsert_ai_names', { rows: toAiNameRows(data) });
+      if (error) console.error('[Namefind] upsert_ai_names error:', error.message);
     } else {
       console.warn('[Namefind] SUPABASE_SERVICE_ROLE_KEY missing — skipping DB write.');
     }
 
-    return NextResponse.json(data);
+    return NextResponse.json(withShortMeaning(data), { headers: quotaHeaders });
 
-  } catch (error: any) {
-    console.error('[Namefind] Error:', { query: currentQuery, message: error?.message });
-
-    // Graceful degradation on Qwen rate-limit
-    if (
-      error?.status === 429 ||
-      error?.response?.status === 429 ||
-      error?.message?.includes('429')
-    ) {
-      const q = currentQuery || 'Unknown';
-      const cap = q.charAt(0).toUpperCase() + q.slice(1);
-      return NextResponse.json({
-        query_tags: ['RATE_LIMITED', q.toUpperCase()],
-        results: [
-          { name: cap, short_meaning: 'Quota reached — please try again shortly.', primary_meaning: 'Quota reached — please try again shortly.' },
-          { name: cap + 'ian', short_meaning: 'Variant placeholder', primary_meaning: 'Variant placeholder' },
-        ],
-      });
-    }
-
-    return NextResponse.json(
-      { error: error?.message || 'Failed to process onomastic request.' },
-      { status: 500 }
-    );
+  } catch (error: unknown) {
+    // No fabricated placeholder names — the client shows an honest error state.
+    const { status, body } = apiErrorResponse(error, `Namefind "${currentQuery.slice(0, 60)}"`);
+    return NextResponse.json(body, { status });
   }
 }

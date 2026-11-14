@@ -3,7 +3,7 @@
 # Target: Alibaba Cloud Function Compute 3.0 (Custom Container)
 #
 # Multi-stage build:
-#   Stage 1 (deps)    — install production node_modules only
+#   Stage 1 (deps)    — install all node_modules (the build needs dev deps)
 #   Stage 2 (builder) — run `next build` to produce .next/standalone
 #   Stage 3 (runner)  — minimal runtime image, no source code, no dev deps
 #
@@ -12,7 +12,7 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # ── Stage 1: dependency installation ─────────────────────────────────────────
-FROM node:18-alpine AS deps
+FROM node:22-alpine AS deps
 
 # libc6-compat is required for certain native Node.js bindings on Alpine
 RUN apk add --no-cache libc6-compat
@@ -23,15 +23,17 @@ WORKDIR /app
 # node_modules will be rebuilt only when package.json or lock file changes.
 COPY package.json package-lock.json ./
 
-# Install production dependencies only — skips all devDependencies
-RUN npm ci --omit=dev
+# Install ALL dependencies: `next build` needs devDependencies such as
+# @tailwindcss/postcss and typescript. The runner stage does not copy
+# node_modules — the standalone output bundles only what the server needs.
+RUN npm ci
 
 # ── Stage 2: Next.js build ────────────────────────────────────────────────────
-FROM node:18-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Bring in the production node_modules from stage 1
+# Bring in node_modules from stage 1
 COPY --from=deps /app/node_modules ./node_modules
 
 # Copy application source (respects .dockerignore — excludes .next, .env*, etc.)
@@ -42,8 +44,11 @@ COPY . .
 # without storing secrets in the image layer.
 ARG NEXT_PUBLIC_SUPABASE_URL
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+# Public base URL used for OAuth redirects (inlined at build time).
+ARG NEXT_PUBLIC_SITE_URL
 ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
 
 # Disable Next.js telemetry inside CI/container builds
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -53,7 +58,7 @@ ENV NODE_ENV=production
 RUN npm run build
 
 # ── Stage 3: production runner ───────────────────────────────────────────────
-FROM node:18-alpine AS runner
+FROM node:22-alpine AS runner
 
 RUN apk add --no-cache libc6-compat
 

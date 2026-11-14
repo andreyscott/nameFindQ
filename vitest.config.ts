@@ -1,6 +1,10 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  resolve: {
+    alias: { '@': fileURLToPath(new URL('./', import.meta.url)) },
+  },
   test: {
     // Run tests in Node environment (no browser/DOM needed for our logic tests)
     environment: 'node',

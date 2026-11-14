@@ -40,7 +40,7 @@ async function seedDatabase() {
             }
 
             const rawData = fs.readFileSync(filePath, 'utf-8');
-            const namesData = JSON.parse(rawData);
+            const namesData = JSON.parse(rawData).map((r: Record<string, unknown>) => ({ ...r, source: 'seed' }));
 
             // 2. Define Batch Parameters
             // Serverless databases choke if you send 10,000 rows at once.
@@ -58,7 +58,7 @@ async function seedDatabase() {
                     chunk,
                     'name', 'primary_meaning', 'contextual_meaning',
                     'region_origin', 'ethnicity_tribe', 'linguistic_root',
-                    'gender', 'pronunciation', 'vibe_tags', 'etymology'
+                    'gender', 'pronunciation', 'vibe_tags', 'etymology', 'source'
                 )}
         ON CONFLICT (name) DO NOTHING;
       `;

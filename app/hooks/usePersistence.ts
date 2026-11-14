@@ -1,126 +1,125 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useRouter } from "next/navigation";
+import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/client";
+import { escapeLike } from "@/lib/text";
+import { sameName, toggleInList, type SavedName } from "@/lib/saved";
 
-export interface SavedName {
-  name: string;
-  short_meaning: string;
-  savedAt: number;
+export type { SavedName };
+
+interface SavedRow {
+  created_at: string;
+  names: { name: string; primary_meaning: string | null } | null;
 }
 
 export function usePersistence() {
   const [savedNames, setSavedNames] = useState<SavedName[]>([]);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const savedRef = useRef<SavedName[]>([]);
+  useEffect(() => {
+    savedRef.current = savedNames;
+  }, [savedNames]);
 
-  // ✅ Memoised Supabase client — stable reference across renders
+  const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
 
-  // ── Load saved names from localStorage (unauthenticated) ─────────────
-  const loadFromLocal = useCallback(() => {
-    try {
-      const saved = localStorage.getItem("namefind_saved");
-      if (saved) setSavedNames(JSON.parse(saved));
-    } catch (e) {
-      console.warn("[usePersistence] Failed to parse localStorage, resetting.", e);
-      localStorage.removeItem("namefind_saved");
-    }
-  }, []);
-
-  // ── Load saved names from Supabase (authenticated) ────────────────────
+  // ── Load saved names for the signed-in user ───────────────────────────
   const loadFromSupabase = useCallback(
     async (userId: string) => {
-      const { data: savedData, error: savedError } = await supabase
+      const { data, error } = await supabase
         .from("saved_names")
         .select("created_at, names ( name, primary_meaning )")
         .eq("user_id", userId);
 
-      if (!savedError && savedData) {
-        const mapped = savedData.map((row: any) => ({
-          name: row.names.name,
-          short_meaning: row.names.primary_meaning || "",
-          savedAt: new Date(row.created_at).getTime(),
-        }));
-        setSavedNames(mapped);
+      if (error) {
+        console.error("[usePersistence] Failed to load saved names:", error.message);
+        return;
       }
+      setSavedNames(
+        ((data ?? []) as unknown as SavedRow[])
+          .filter((row) => row.names)
+          .map((row) => ({
+            name: row.names!.name,
+            short_meaning: row.names!.primary_meaning || "",
+            savedAt: new Date(row.created_at).getTime(),
+          }))
+      );
     },
     [supabase]
   );
 
   // ── Auth listener — drives all data loading ───────────────────────────
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        loadFromSupabase(session.user.id);
-      } else {
-        loadFromLocal();
-      }
-    });
+    const apply = (u: User | null) => {
+      setUser(u);
+      if (u) loadFromSupabase(u.id);
+      else setSavedNames([]);
+    };
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        loadFromSupabase(session.user.id);
-      } else {
-        loadFromLocal();
-      }
-    });
-
+    supabase.auth.getSession().then(({ data: { session } }) => apply(session?.user ?? null));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) =>
+      apply(session?.user ?? null)
+    );
     return () => subscription.unsubscribe();
-  }, [supabase, loadFromSupabase, loadFromLocal]);
+  }, [supabase, loadFromSupabase]);
 
-  // ── toggleSave — optimistic UI + Supabase write ───────────────────────
+  // ── toggleSave — optimistic UI, rolled back if the write fails ────────
   const toggleSave = useCallback(
-    async (nameObj: { name: string; short_meaning: string }) => {
+    async (nameObj: { name: string; short_meaning: string }): Promise<boolean> => {
       if (!user) {
-        window.location.href =
-          "/login?message=Please log in to save names to your collection";
-        return;
+        router.push("/login?message=save_requires_login");
+        return false;
       }
 
-      const isAlreadySaved = savedNames.some((n) => n.name === nameObj.name);
+      const previous = savedRef.current;
+      const wasSaved = previous.some((n) => sameName(n.name, nameObj.name));
+      const next = toggleInList(previous, nameObj);
+      savedRef.current = next; // keep rapid successive clicks consistent
+      setSaveError(null);
+      setSavedNames(next);
 
-      setSavedNames((prev) => {
-        if (isAlreadySaved) return prev.filter((n) => n.name !== nameObj.name);
-        return [...prev, { ...nameObj, savedAt: Date.now() }];
-      });
+      const fail = (reason: string) => {
+        console.error("[usePersistence] Save failed:", reason);
+        savedRef.current = previous;
+        setSavedNames(previous);
+        setSaveError(
+          wasSaved ? `Couldn't remove ${nameObj.name}. Please try again.` : `Couldn't save ${nameObj.name}. Please try again.`
+        );
+        return false;
+      };
 
-      try {
-        const { data: nameRecord } = await supabase
-          .from("names")
-          .select("id")
-          .ilike("name", nameObj.name)
-          .limit(1)
-          .single();
+      // Curated seed rows win over AI rows with the same spelling.
+      const { data: nameRecord, error: lookupError } = await supabase
+        .from("names")
+        .select("id")
+        .ilike("name", escapeLike(nameObj.name.trim()))
+        .order("source", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-        if (!nameRecord) return;
+      if (lookupError) return fail(lookupError.message);
+      if (!nameRecord) return fail(`"${nameObj.name}" is not in the dictionary yet`);
 
-        if (isAlreadySaved) {
-          await supabase
-            .from("saved_names")
-            .delete()
-            .eq("user_id", user.id)
-            .eq("name_id", nameRecord.id);
-        } else {
-          await supabase
-            .from("saved_names")
-            .insert({ user_id: user.id, name_id: nameRecord.id });
-        }
-      } catch (e) {
-        console.error("Error toggling save:", e);
-      }
+      const { error } = wasSaved
+        ? await supabase.from("saved_names").delete().eq("user_id", user.id).eq("name_id", nameRecord.id)
+        : await supabase.from("saved_names").upsert(
+            { user_id: user.id, name_id: nameRecord.id },
+            { onConflict: "user_id,name_id", ignoreDuplicates: true }
+          );
+
+      if (error) return fail(error.message);
+      return true;
     },
-    [user, savedNames, supabase]
+    [user, supabase, router]
   );
 
-  // ── isSaved — stable reference ────────────────────────────────────────
   const isSaved = useCallback(
-    (name: string) => savedNames.some((n) => n.name === name),
+    (name: string) => savedNames.some((n) => sameName(n.name, name)),
     [savedNames]
   );
 
-  return { savedNames, toggleSave, isSaved, user };
+  return { savedNames, toggleSave, isSaved, user, saveError };
 }

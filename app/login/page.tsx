@@ -1,12 +1,14 @@
 import { login, signup, signInWithOAuth, signOut } from './actions'
 import { createClient } from '@/utils/supabase/server'
+import { authMessage } from '@/lib/authMessages'
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ message: string }>
+  searchParams: Promise<{ message?: string }>
 }) {
-  const { message } = await searchParams
+  // Only fixed strings for known codes — never echo URL text onto the page.
+  const message = authMessage((await searchParams).message)
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

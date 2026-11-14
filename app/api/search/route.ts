@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/utils/supabase/server';
-import { rateLimit } from '@/lib/rateLimiter';
-import { getQwenClient } from '@/lib/qwenClient';
+import { z } from 'zod';
+import { consumeRequest, consumeAiBudget, subjectFor, quotaDeniedResponse } from '@/lib/quota';
+import { getClientIp } from '@/lib/clientIp';
+import { embed } from '@/lib/ai/qwen';
+import { apiErrorResponse } from '@/lib/apiError';
 import postgres from 'postgres';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -13,6 +16,10 @@ export interface NameSearchResult {
   vibe_tags: string[];
   ethnicity_tribe: string | null;
 }
+
+const RequestSchema = z.object({
+  query: z.string().trim().min(1, 'Query is required.').max(200, 'Query must be 200 characters or fewer.'),
+});
 
 // ── Module-level postgres singleton ──────────────────────────────────────────
 // Created once per serverless instance; avoids pool creation overhead on
@@ -65,54 +72,34 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Content-Type must be application/json.' }, { status: 415 });
     }
 
-    // 2. Auth
+    // 2. Parse & validate body
+    const parsed = RequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid request.' }, { status: 400 });
+    }
+    query = parsed.data.query;
+
+    // 3. Shared quota (counts toward the same daily "search" allowance as Vibe/Blend)
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Authentication required. Please sign in.' }, { status: 401 });
+    const quota = await consumeRequest('search', subjectFor(user?.id, getClientIp(request.headers)));
+    if (!quota.allowed) {
+      const denied = quotaDeniedResponse(quota, !!user);
+      return NextResponse.json(denied.body, { status: denied.status });
     }
-
-    // 3. Rate limit (60 req/min per user)
-    if (!rateLimit(user.id, 60, 60_000)) {
-      return NextResponse.json({ error: 'Too many requests. Please wait a moment and try again.' }, { status: 429 });
-    }
-
-    // 4. Parse & validate body
-    const body = await request.json();
-    query = (body?.query ?? '').trim();
-    if (!query) return NextResponse.json({ error: 'Query is required.' }, { status: 400 });
-    if (query.length > 200) return NextResponse.json({ error: 'Query must be 200 characters or fewer.' }, { status: 400 });
-    if (!process.env.QWEN_API_KEY) return NextResponse.json({ error: 'Server configuration error: QWEN_API_KEY missing.' }, { status: 500 });
 
     // 5. ── Embedding — check cache before calling API ───────────────────────
     let embeddingValues = getCachedEmbedding(query);
 
     if (!embeddingValues) {
-      const qwen = getQwenClient();
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12_000);
-
-      try {
-        const embeddingResponse = await qwen.embeddings.create(
-          { model: 'text-embedding-v3', input: query, dimensions: 1024 },
-          { signal: controller.signal }
+      if (!(await consumeAiBudget())) {
+        return NextResponse.json(
+          { error: 'Namefinder has reached its daily AI limit. Please try again tomorrow.', code: 'ai_budget' },
+          { status: 503 }
         );
-        clearTimeout(timeoutId);
-        embeddingValues = embeddingResponse.data?.[0]?.embedding ?? null;
-      } catch (err: any) {
-        clearTimeout(timeoutId);
-        const isAbort = err.name === 'AbortError' || err.code === 'ERR_CANCELED';
-        console.error(`[Search] Embedding failed: ${isAbort ? 'timeout (12s)' : err.message}`);
-        throw err;
       }
-
-      if (!embeddingValues || embeddingValues.length !== 1024) {
-        throw new Error(`Invalid embedding from Qwen API. Expected 1024 values, got ${embeddingValues?.length ?? 0}.`);
-      }
-
-      // Cache the embedding — deterministic for this query string
+      embeddingValues = await embed(query);
       setCachedEmbedding(query, embeddingValues);
-      console.log(`[Search] Embedding computed and cached for: "${query}"`);
     } else {
       console.log(`[Search] Embedding cache hit for: "${query}"`);
     }
@@ -130,23 +117,13 @@ export async function POST(request: Request) {
       )
     `;
 
-    return NextResponse.json({ query, results });
+    return NextResponse.json(
+      { query, results },
+      { headers: { 'X-Quota-Limit': String(quota.limit), 'X-Quota-Remaining': String(quota.remaining) } }
+    );
 
   } catch (error: unknown) {
-    console.error('[Search] Error:', { query, message: (error as Error)?.message });
-
-    const isRateLimit =
-      (error as { status?: number })?.status === 429 ||
-      (error instanceof Error && error.message.includes('429'));
-
-    if (isRateLimit) {
-      return NextResponse.json(
-        { error: 'Embedding service rate limited. Please try again shortly.' },
-        { status: 429 }
-      );
-    }
-
-    const message = error instanceof Error ? error.message : 'Semantic search failed.';
-    return NextResponse.json({ error: message }, { status: 500 });
+    const { status, body } = apiErrorResponse(error, `Search "${query.slice(0, 60)}"`);
+    return NextResponse.json(body, { status });
   }
 }
