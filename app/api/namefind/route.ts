@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createClient } from '@/utils/supabase/server';
 import { getAdminClient } from '@/utils/supabase/admin';
-import { rateLimit } from '@/lib/rateLimiter';
+import { consumeRequest, consumeAiBudget, subjectFor, quotaDeniedResponse } from '@/lib/quota';
+import { getClientIp } from '@/lib/clientIp';
 import { chatJSON, AiError } from '@/lib/ai/qwen';
 import { NameResultSchema, type NameResponse } from '@/lib/ai/schemas';
 import { INJECTION_GUARD, buildNamefindUserPrompt, toAiNameRows } from '@/lib/ai/prompts';
@@ -141,19 +142,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Content-Type must be application/json.' }, { status: 415 });
     }
 
-    // 2. Auth
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Authentication required. Please sign in.' }, { status: 401 });
-    }
-
-    // 3. Rate limit (30 req/min per user)
-    if (!rateLimit(user.id, 30, 60_000)) {
-      return NextResponse.json({ error: 'Too many requests. Please wait a moment and try again.' }, { status: 429 });
-    }
-
-    // 4. Parse & validate body
+    // 2. Parse & validate body
     const parsed = RequestSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid request.' }, { status: 400 });
@@ -161,19 +150,37 @@ export async function POST(request: Request) {
     const { query, type } = parsed.data;
     currentQuery = query;
 
+    // 3. Identify the caller (signed in → per-user quota, else per-IP free tier)
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    // 4. Shared quota (burst + daily), stored in Supabase
+    const quota = await consumeRequest('search', subjectFor(user?.id, getClientIp(request.headers)));
+    if (!quota.allowed) {
+      const denied = quotaDeniedResponse(quota, !!user);
+      return NextResponse.json(denied.body, { status: denied.status });
+    }
+    const quotaHeaders = { 'X-Quota-Limit': String(quota.limit), 'X-Quota-Remaining': String(quota.remaining) };
+
     // 5. In-memory cache
     const cacheKey = `${type}::${query.toLowerCase()}`;
     const cached = getCached(cacheKey);
-    if (cached) return NextResponse.json(withShortMeaning(cached));
+    if (cached) return NextResponse.json(withShortMeaning(cached), { headers: quotaHeaders });
 
     // 6. DB-first lookup
     const dbResult = await tryDbFirst(supabase, query, type);
     if (dbResult) {
       cache.set(cacheKey, { data: dbResult, ts: Date.now() });
-      return NextResponse.json(withShortMeaning(dbResult));
+      return NextResponse.json(withShortMeaning(dbResult), { headers: quotaHeaders });
     }
 
-    // 7. AI (validated)
+    // 7. AI (validated), charged against the site-wide daily budget
+    if (!(await consumeAiBudget())) {
+      return NextResponse.json(
+        { error: 'Namefinder has reached its daily AI limit. Please try again tomorrow.', code: 'ai_budget' },
+        { status: 503 }
+      );
+    }
     const { data, model } = await chatJSON({
       schema: NameResultSchema,
       system: SYSTEM_PROMPT,
@@ -196,7 +203,7 @@ export async function POST(request: Request) {
       console.warn('[Namefind] SUPABASE_SERVICE_ROLE_KEY missing — skipping DB write.');
     }
 
-    return NextResponse.json(withShortMeaning(data));
+    return NextResponse.json(withShortMeaning(data), { headers: quotaHeaders });
 
   } catch (error: unknown) {
     console.error('[Namefind] Error:', { query: currentQuery, message: (error as Error)?.message });

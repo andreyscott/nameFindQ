@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
-import { headers } from 'next/headers';
 import { z } from 'zod';
 import { createClient } from '@/utils/supabase/server';
 import { getAdminClient } from '@/utils/supabase/admin';
-import { rateLimit } from '@/lib/rateLimiter';
+import { consumeRequest, consumeAiBudget, subjectFor, quotaDeniedResponse } from '@/lib/quota';
+import { getClientIp } from '@/lib/clientIp';
 import { chatJSON } from '@/lib/ai/qwen';
 import { TreeAISchema, type TreeBranch } from '@/lib/ai/schemas';
 import { INJECTION_GUARD, buildTreeUserPrompt } from '@/lib/ai/prompts';
@@ -160,30 +160,27 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Content-Type must be application/json.' }, { status: 415 });
     }
 
-    // 2. Rate limit by IP (public endpoint)
-    const headersList = await headers();
-    const ip =
-      headersList.get('x-forwarded-for')?.split(',')[0].trim() ??
-      headersList.get('x-real-ip') ??
-      'unknown';
-
-    if (!rateLimit(ip, 10, 60_000)) {
-      return NextResponse.json({ error: 'Too many requests. Please try again shortly.' }, { status: 429 });
-    }
-
-    // 3. Parse & validate body
+    // 2. Parse & validate body
     const parsed = RequestSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid request.' }, { status: 400 });
     }
     const { name } = parsed.data;
 
+    // 3. Shared quota — public endpoint, so signed-out visitors get the free tier
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    const quota = await consumeRequest('tree', subjectFor(user?.id, getClientIp(request.headers)));
+    if (!quota.allowed) {
+      const denied = quotaDeniedResponse(quota, !!user);
+      return NextResponse.json(denied.body, { status: denied.status });
+    }
+
     // 4. In-memory cache
     const cached = getCachedTree(name);
     if (cached) return NextResponse.json(cached);
 
     // 5. Supabase lookup
-    const supabase = await createClient();
     const { data: dbRowData } = await supabase
       .from('names')
       .select('id, source, linguistic_root, primary_meaning, contextual_meaning, region_origin, ethnicity_tribe, etymology')
@@ -201,7 +198,11 @@ export async function POST(request: Request) {
       return NextResponse.json(treeData);
     }
 
-    // 7. AI (validated); any failure → graceful fallback
+    // 7. AI (validated, charged to the global budget); failure → fallback
+    if (!(await consumeAiBudget())) {
+      console.warn('[Tree] Global AI budget spent — serving fallback.');
+      return NextResponse.json(buildFallbackTree(name, dbRow));
+    }
     let aiData;
     try {
       ({ data: aiData } = await chatJSON({

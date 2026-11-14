@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/utils/supabase/server';
-import { rateLimit } from '@/lib/rateLimiter';
+import { z } from 'zod';
+import { consumeRequest, consumeAiBudget, subjectFor, quotaDeniedResponse } from '@/lib/quota';
+import { getClientIp } from '@/lib/clientIp';
 import { embed, AiError } from '@/lib/ai/qwen';
 import postgres from 'postgres';
 
@@ -13,6 +15,10 @@ export interface NameSearchResult {
   vibe_tags: string[];
   ethnicity_tribe: string | null;
 }
+
+const RequestSchema = z.object({
+  query: z.string().trim().min(1, 'Query is required.').max(200, 'Query must be 200 characters or fewer.'),
+});
 
 // ── Module-level postgres singleton ──────────────────────────────────────────
 // Created once per serverless instance; avoids pool creation overhead on
@@ -65,28 +71,32 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Content-Type must be application/json.' }, { status: 415 });
     }
 
-    // 2. Auth
+    // 2. Parse & validate body
+    const parsed = RequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid request.' }, { status: 400 });
+    }
+    query = parsed.data.query;
+
+    // 3. Shared quota (counts toward the same daily "search" allowance as Vibe/Blend)
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Authentication required. Please sign in.' }, { status: 401 });
+    const quota = await consumeRequest('search', subjectFor(user?.id, getClientIp(request.headers)));
+    if (!quota.allowed) {
+      const denied = quotaDeniedResponse(quota, !!user);
+      return NextResponse.json(denied.body, { status: denied.status });
     }
-
-    // 3. Rate limit (60 req/min per user)
-    if (!rateLimit(user.id, 60, 60_000)) {
-      return NextResponse.json({ error: 'Too many requests. Please wait a moment and try again.' }, { status: 429 });
-    }
-
-    // 4. Parse & validate body
-    const body = await request.json();
-    query = (body?.query ?? '').trim();
-    if (!query) return NextResponse.json({ error: 'Query is required.' }, { status: 400 });
-    if (query.length > 200) return NextResponse.json({ error: 'Query must be 200 characters or fewer.' }, { status: 400 });
 
     // 5. ── Embedding — check cache before calling API ───────────────────────
     let embeddingValues = getCachedEmbedding(query);
 
     if (!embeddingValues) {
+      if (!(await consumeAiBudget())) {
+        return NextResponse.json(
+          { error: 'Namefinder has reached its daily AI limit. Please try again tomorrow.', code: 'ai_budget' },
+          { status: 503 }
+        );
+      }
       embeddingValues = await embed(query);
       setCachedEmbedding(query, embeddingValues);
     } else {
@@ -106,7 +116,10 @@ export async function POST(request: Request) {
       )
     `;
 
-    return NextResponse.json({ query, results });
+    return NextResponse.json(
+      { query, results },
+      { headers: { 'X-Quota-Limit': String(quota.limit), 'X-Quota-Remaining': String(quota.remaining) } }
+    );
 
   } catch (error: unknown) {
     console.error('[Search] Error:', { query, message: (error as Error)?.message });
