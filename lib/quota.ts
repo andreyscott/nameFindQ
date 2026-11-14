@@ -56,7 +56,10 @@ export function subjectFor(userId: string | null | undefined, ip: string): Subje
 
 export const supabaseQuotaRpc: QuotaRpc = async (buckets) => {
   const admin = getAdminClient();
-  if (!admin) return null;
+  if (!admin) {
+    console.error('[quota] SUPABASE_SERVICE_ROLE_KEY or NEXT_PUBLIC_SUPABASE_URL is not set — quota store unavailable');
+    return null;
+  }
   const { data, error } = await admin.rpc('consume_quota', {
     p_buckets: buckets.map((b) => b.bucket),
     p_windows: buckets.map((b) => b.windowSeconds),
