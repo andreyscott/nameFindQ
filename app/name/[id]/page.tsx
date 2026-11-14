@@ -8,6 +8,7 @@ import { VibeScanner } from "../../components/VibeScanner";
 import { EtymologyTree } from "../../components/EtymologyTree";
 import { usePersistence } from "../../hooks/usePersistence";
 import { createClient } from "../../../utils/supabase/client";
+import { escapeLike } from "@/lib/text";
 
 // ── Bookmark icon ──────────────────────────────────────────────────────────
 function BookmarkIcon({ filled }: { filled: boolean }) {
@@ -62,7 +63,8 @@ export default function NameDetailsPage({ params }: { params: Promise<{ id: stri
         const { data: nameData, error: fetchError } = await supabase
           .from("names")
           .select("*")
-          .ilike("name", nameId)
+          .ilike("name", escapeLike(nameId))
+          .order("source", { ascending: false }) // curated 'seed' rows first
           .order("created_at", { ascending: false })
           .limit(1)
           .single();

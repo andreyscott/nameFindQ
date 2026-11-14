@@ -5,6 +5,7 @@ import { getAdminClient } from '@/utils/supabase/admin';
 import { rateLimit } from '@/lib/rateLimiter';
 import { chatJSON, AiError } from '@/lib/ai/qwen';
 import { NameResultSchema, type NameResponse } from '@/lib/ai/schemas';
+import { INJECTION_GUARD, buildNamefindUserPrompt, toAiNameRows } from '@/lib/ai/prompts';
 
 // ── Request schema ───────────────────────────────────────────────────────────
 const RequestSchema = z.object({
@@ -38,7 +39,9 @@ Required JSON structure:
   ]
 }
 
-Return 5 name results for vibe queries, and 3 for blend queries.`;
+Return 5 name results for vibe queries, and 3 for blend queries.
+
+${INJECTION_GUARD}`;
 
 // ── In-memory result cache (1 hour TTL) ──────────────────────────────────────
 const cache = new Map<string, { data: NameResponse; ts: number }>();
@@ -123,14 +126,6 @@ async function tryDbFirst(
   };
 }
 
-// ── User prompt builder ───────────────────────────────────────────────────────
-function buildUserPrompt(query: string, type: 'vibe' | 'blend'): string {
-  if (type === 'blend') {
-    return `Blend query: "${query}". Merge phonetic and semantic qualities of both roots into 3 synthesized name variations with full etymologies.`;
-  }
-  return `Vibe query: "${query}". Return the 5 best matching names (real or synthesized) with etymologies and migration data.`;
-}
-
 // Backward-compat alias consumed by the results page.
 function withShortMeaning(data: NameResponse) {
   return { ...data, results: data.results.map(r => ({ ...r, short_meaning: r.primary_meaning })) };
@@ -182,33 +177,20 @@ export async function POST(request: Request) {
     const { data, model } = await chatJSON({
       schema: NameResultSchema,
       system: SYSTEM_PROMPT,
-      user: buildUserPrompt(query, type),
+      user: buildNamefindUserPrompt(query, type),
       maxTokens: 1800,
     });
     console.log(`[Namefind] ${model} answered (${data.results.length} results)`);
     cache.set(cacheKey, { data, ts: Date.now() });
 
-    // 8. Upsert into Supabase (fire-and-forget)
+    // 8. Write back (fire-and-forget). The RPC never modifies curated seed
+    //    rows — see supabase/migrations/20261114000100_names_source.sql.
     const admin = getAdminClient();
     if (admin) {
-      const namesToUpsert = data.results.map((r) => ({
-        name: r.name,
-        primary_meaning: r.primary_meaning,
-        contextual_meaning: r.contextual_meaning ?? null,
-        region_origin: r.region_origin ?? null,
-        ethnicity_tribe: r.ethnicity_tribe ?? null,
-        linguistic_root: r.linguistic_root ?? null,
-        gender: r.gender ?? null,
-        pronunciation: r.pronunciation ?? null,
-        vibe_tags: data.query_tags,
-        etymology: r.etymology_node ?? null,
-      }));
-
       admin
-        .from('names')
-        .upsert(namesToUpsert, { onConflict: 'name', ignoreDuplicates: false })
+        .rpc('upsert_ai_names', { rows: toAiNameRows(data) })
         .then(({ error }) => {
-          if (error) console.error('[Namefind] Supabase upsert error:', error.message);
+          if (error) console.error('[Namefind] upsert_ai_names error:', error.message);
         });
     } else {
       console.warn('[Namefind] SUPABASE_SERVICE_ROLE_KEY missing — skipping DB write.');

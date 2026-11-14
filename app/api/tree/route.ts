@@ -6,6 +6,8 @@ import { getAdminClient } from '@/utils/supabase/admin';
 import { rateLimit } from '@/lib/rateLimiter';
 import { chatJSON } from '@/lib/ai/qwen';
 import { TreeAISchema, type TreeBranch } from '@/lib/ai/schemas';
+import { INJECTION_GUARD, buildTreeUserPrompt } from '@/lib/ai/prompts';
+import { escapeLike } from '@/lib/text';
 
 export type { TreeBranch };
 
@@ -25,6 +27,7 @@ export interface TreeData {
 
 interface DbRow {
   id: string;
+  source: 'seed' | 'ai';
   linguistic_root: string | null;
   primary_meaning: string | null;
   contextual_meaning: string | null;
@@ -71,7 +74,9 @@ Required JSON structure (all fields mandatory, no empty strings):
 CRITICAL RULES:
 - branches must contain exactly 3 objects
 - variant_type must be one of: Direct, Extended, Feminine, Short Form, Modern
-- All string values must be non-empty`;
+- All string values must be non-empty
+
+${INJECTION_GUARD}`;
 
 // ── In-memory result cache (1 hour TTL) ──────────────────────────────────────
 const treeCache = new Map<string, { data: TreeData; ts: number }>();
@@ -181,8 +186,9 @@ export async function POST(request: Request) {
     const supabase = await createClient();
     const { data: dbRowData } = await supabase
       .from('names')
-      .select('id, linguistic_root, primary_meaning, contextual_meaning, region_origin, ethnicity_tribe, etymology')
-      .ilike('name', name)
+      .select('id, source, linguistic_root, primary_meaning, contextual_meaning, region_origin, ethnicity_tribe, etymology')
+      .ilike('name', escapeLike(name))
+      .order('source', { ascending: false }) // 'seed' sorts before 'ai'
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -195,18 +201,13 @@ export async function POST(request: Request) {
       return NextResponse.json(treeData);
     }
 
-    // 7. Seed context from existing DB data
-    const seedContext = dbRow
-      ? `Known data: meaning="${dbRow.primary_meaning ?? '?'}", root="${dbRow.linguistic_root ?? '?'}", region="${dbRow.region_origin ?? '?'}", culture="${dbRow.ethnicity_tribe ?? '?'}", context="${dbRow.contextual_meaning ?? '?'}". Enrich with historical branches.`
-      : `No prior data. Research "${name}" from scratch using onomastic knowledge.`;
-
-    // 8. AI (validated); any failure → graceful fallback
+    // 7. AI (validated); any failure → graceful fallback
     let aiData;
     try {
       ({ data: aiData } = await chatJSON({
         schema: TreeAISchema,
         system: SYSTEM_PROMPT,
-        user: `Generate etymology tree JSON for "${name}". ${seedContext}`,
+        user: buildTreeUserPrompt(name, dbRow),
         maxTokens: 1200,
       }));
     } catch (err) {
@@ -219,8 +220,9 @@ export async function POST(request: Request) {
     const treeData: TreeData = { name, ...aiData, source: 'ai' };
     treeCache.set(name.toLowerCase(), { data: treeData, ts: Date.now() });
 
-    // 9. Write enriched data back to DB by row id
-    if (dbRow?.id) {
+    // 8. Write enriched data back by row id — AI rows only; curated seed
+    //    rows are never modified.
+    if (dbRow?.id && dbRow.source === 'ai') {
       const admin = getAdminClient();
       if (admin) {
         admin
