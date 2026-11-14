@@ -37,7 +37,7 @@ export async function middleware(request: NextRequest) {
       const loginUrl = new URL('/login', request.url)
       loginUrl.searchParams.set(
         'message',
-        'Please sign in to access this page'
+        'signin_required'
       )
       return NextResponse.redirect(loginUrl)
     }

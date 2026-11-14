@@ -77,7 +77,7 @@ export function usePersistence() {
     async (nameObj: { name: string; short_meaning: string }) => {
       if (!user) {
         window.location.href =
-          "/login?message=Please log in to save names to your collection";
+          "/login?message=save_requires_login";
         return;
       }
 
