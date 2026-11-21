@@ -21,12 +21,16 @@ export class AiError extends Error {
 }
 
 const DEFAULT_BASE_URL = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
-// qwen-plus first (turbo is currently rate-limited on this key); on
-// 429/403/invalid output we fall through to the next model.
+// qwen-flash first: ~7 s for a 5-name answer, vs 23-26 s for qwen-plus.
+// (qwen-turbo returns 404 "Model not exist" on the intl endpoint.)
+// On timeout/429/403/invalid output we fall through to the next model.
 // Override with QWEN_CHAT_MODELS (comma-separated, max 2 used).
-const DEFAULT_MODELS = ['qwen-plus', 'qwen-turbo'];
+const DEFAULT_MODELS = ['qwen-flash', 'qwen-plus'];
 const MAX_MODELS = 2;
-const DEFAULT_BUDGET_MS = 20_000;
+const DEFAULT_BUDGET_MS = 45_000;
+// Every attempt except the last is capped, so a slow model can't use up the
+// whole budget and leave the fallback no time to run.
+const NON_FINAL_ATTEMPT_MS = 15_000;
 
 function config() {
   const apiKey = process.env.QWEN_API_KEY;
@@ -80,8 +84,9 @@ export async function chatJSON<T>(opts: ChatJSONOptions<T>): Promise<ChatJSONRes
   let lastKind: AiErrorKind = 'unavailable';
   let lastMessage = 'no model attempted';
 
-  for (const model of models) {
+  for (const [i, model] of models.entries()) {
     const remaining = deadline - Date.now();
+    const isLast = i === models.length - 1;
     if (remaining <= 500) {
       lastKind = 'timeout';
       lastMessage = 'time budget exhausted';
@@ -103,10 +108,15 @@ export async function chatJSON<T>(opts: ChatJSONOptions<T>): Promise<ChatJSONRes
           max_tokens: opts.maxTokens ?? 1500,
           response_format: { type: 'json_object' },
         }),
-        signal: AbortSignal.timeout(remaining),
+        signal: AbortSignal.timeout(isLast ? remaining : Math.min(remaining, NON_FINAL_ATTEMPT_MS)),
       });
     } catch (err) {
-      if (isAbort(err)) throw new AiError('timeout', `${model} timed out`);
+      if (isAbort(err)) {
+        lastKind = 'timeout';
+        lastMessage = `${model} timed out`;
+        console.warn(`[ai] ${lastMessage}`);
+        continue;
+      }
       lastKind = 'unavailable';
       lastMessage = `${model} network error: ${(err as Error)?.message}`;
       console.warn(`[ai] ${lastMessage}`);

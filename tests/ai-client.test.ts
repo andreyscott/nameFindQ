@@ -41,7 +41,7 @@ describe('chatJSON', () => {
     vi.stubGlobal('fetch', fetchMock);
     const res = await chatJSON({ schema: Simple, system: 's json', user: 'u' });
     expect(res.data).toEqual({ a: 1 });
-    expect(res.model).toBe('qwen-plus');
+    expect(res.model).toBe('qwen-flash');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -65,7 +65,7 @@ describe('chatJSON', () => {
     vi.stubGlobal('fetch', fetchMock);
     const res = await chatJSON({ schema: Simple, system: 's', user: 'u' });
     expect(res.data).toEqual({ a: 2 });
-    expect(res.model).toBe('qwen-turbo');
+    expect(res.model).toBe('qwen-plus');
   });
 
   it('falls through when a model is not accessible (403)', async () => {
@@ -80,7 +80,7 @@ describe('chatJSON', () => {
     vi.stubGlobal('fetch', fetchMock);
     const res = await chatJSON({ schema: Simple, system: 's', user: 'u' });
     expect(res.data).toEqual({ a: 4 });
-    expect(res.model).toBe('qwen-turbo');
+    expect(res.model).toBe('qwen-plus');
   });
 
   it('throws rate_limited when every model is rate limited', async () => {
@@ -112,6 +112,28 @@ describe('chatJSON', () => {
     await expect(chatJSON({ schema: Simple, system: 's', user: 'u' })).rejects.toMatchObject({
       kind: 'timeout',
     });
+  });
+
+  it('falls through to the next model when the first one times out', async () => {
+    const abort = Object.assign(new Error('aborted'), { name: 'TimeoutError' });
+    const fetchMock = vi.fn().mockRejectedValueOnce(abort).mockResolvedValueOnce(okBody('{"a":5}'));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await chatJSON({ schema: Simple, system: 's', user: 'u' });
+    expect(res.data).toEqual({ a: 5 });
+    expect(res.model).toBe('qwen-plus');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('caps the first attempt so a slow model cannot eat the whole budget', async () => {
+    const timeouts: number[] = [];
+    const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      timeouts.push(ms);
+      return new AbortController().signal;
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okBody('{"a":1}')));
+    await chatJSON({ schema: Simple, system: 's', user: 'u', budgetMs: 40_000 });
+    spy.mockRestore();
+    expect(timeouts[0]).toBeLessThan(40_000);
   });
 
   it('respects QWEN_CHAT_MODELS', async () => {
